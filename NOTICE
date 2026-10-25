@@ -1,0 +1,29 @@
+openSW — reading SolidWorks part files without SolidWorks
+
+This project's understanding of the .SLDPRT container draws on publicly
+published reverse-engineering work by others. Facts about a file format are
+not protectable; the code expressing them is. Where an implementation was
+informed by a third-party project, that project is credited here.
+
+  cadmpeg (https://github.com/cadmpeg/cadmpeg)
+      Code under Apache-2.0, format documentation under CC-BY-4.0.
+      Source of the block-container frame, the cache-cell and tail-directory
+      shapes, the nibble-swapped section names, the __ZLB / section wrapper
+      layout, and the Parasolid stream header.
+
+  openswx (https://github.com/schwitters/openswx)
+      MIT. Original description of the modern block container and its marker.
+
+  blussyya/sldprt-format-research (https://github.com/blussyya/sldprt-format-research)
+      MIT. Methodology, and the negative result that Contents/DisplayLists is
+      the display tessellation rather than the B-rep.
+
+  CosmicFrontierLabs/solid-diff (https://github.com/CosmicFrontierLabs/solid-diff)
+      No licence stated — consulted as documentation only. No code copied.
+
+  Oblikovati (https://github.com/Oblikovati/Oblikovati)
+      GPL-2.0 — consulted as documentation only. No code copied.
+
+The Parasolid XT Format Reference is published by Siemens Industry Software
+Inc. Parasolid and SolidWorks are trademarks of their respective owners. This
+project is not affiliated with, endorsed by, or derived from either.
