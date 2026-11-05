@@ -32,6 +32,22 @@ deleted after conversion, results after 30 minutes. `PORT` and `OPENSW_HOST`
 set the address; on a public server, put an authenticating reverse proxy in
 front.
 
+## Drawings
+
+The web app also shows a SolidWorks drawing (`.SLDDRW`) as SVG, sheet by
+sheet: lines, arcs, texts (fonts, sizes, bold, colours, Ø ± ° symbols), table
+cells and model views. Click a stroke to read its name. Nothing is
+recomputed: the strokes are those SolidWorks wrote in the file.
+
+```python
+from sldprt.drawing import read_drawing, to_svg
+
+drawing = read_drawing("plan.SLDDRW")
+svg = to_svg(drawing.active)
+```
+
+Not shown yet: centre marks, hatches, images, sketches drawn inside a view.
+
 ## Parasolid schemas
 
 Not included: they are Siemens files. Built-in facts cover SolidWorks parts.
