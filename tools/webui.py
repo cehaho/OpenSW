@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Local web page to convert a part to Parasolid or STEP."""
+"""Local web page to convert a part to Parasolid or STEP, or view a drawing.
+
+A drawing (``.SLDDRW``) is not converted: it is read by
+:mod:`sldprt.drawing` and shown as SVG, sheet by sheet.
+"""
 
 from __future__ import annotations
 
@@ -121,6 +125,7 @@ class Job:
         self.source: Path | None = None
         self.fini_a: float | None = None
         self.vue: bytes | None = None
+        self.plan: bytes | None = None
 
 
 JOBS: dict[str, Job] = {}
@@ -206,6 +211,69 @@ def _balayer() -> None:
             purger()
 
 
+#: The route that converts nothing: it reads a drawing to show it.
+ROUTE_PLAN = "plan"
+
+
+def plan_json(source: Path) -> dict:
+    """A drawing ready for the page: each sheet as SVG."""
+    from sldprt.drawing import read_drawing, to_svg
+
+    dessin = read_drawing(source)
+    return {
+        "feuilles": [
+            {
+                "nom": f.nom,
+                "active": f.active,
+                "svg": to_svg(f),
+                "elements": len(f.elements),
+                "vues": [{"nom": v.nom, "echelle": v.echelle,
+                          "aretes": len(v.aretes)} for v in f.vues],
+            }
+            for f in dessin.feuilles
+        ],
+        "non_lus": dessin.non_lus,
+    }
+
+
+def voir(job: Job, data: bytes) -> None:
+    """Read a drawing and keep its SVG in memory for the page.
+
+    The uploaded file is written only while it is read, then deleted.
+    """
+    say = job.journal.say
+    try:
+        dossier = job.dossier = Path(tempfile.mkdtemp(prefix="opensw-"))
+        source = job.source = dossier / job.name
+        source.write_bytes(data)
+        say(f"{job.name} received, {_human(len(data))}", "ok")
+        say(f"reader: {version()}", "detail")
+        say("drawing: sldprt.drawing.read_drawing()", "step")
+        début = time.monotonic()
+        plan = plan_json(source)
+        for f in plan["feuilles"]:
+            vues = ", ".join(
+                f"{v['nom']} ({v['aretes']} edges, scale {v['echelle']:g})"
+                for v in f["vues"]) or "no view"
+            actif = " (active)" if f["active"] else ""
+            say(f"{f['nom']}{actif}: {f['elements']} elements, {vues}", "detail")
+        for motif, n in plan["non_lus"].items():
+            say(f"not shown: {motif}, {n}", "note")
+        say(f"{len(plan['feuilles'])} sheet(s) read in "
+            f"{time.monotonic() - début:.1f} s", "ok")
+        job.plan = json.dumps(plan).encode()
+    except Exception as échec:
+        job.failed = True
+        say(f"{type(échec).__name__}: {échec}", "err")
+        for ligne in traceback.format_exc().splitlines()[-6:]:
+            say(ligne.rstrip(), "detail")
+    finally:
+        if job.dossier is not None:
+            shutil.rmtree(job.dossier, ignore_errors=True)
+        job.fini_a = time.monotonic()
+        job.done = True
+
+
 def préparer_vue(job: Job) -> None:
     say = job.journal.say
     try:
@@ -240,7 +308,7 @@ def préparer_vue(job: Job) -> None:
 HTML = r"""<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
-<title>openSW: SLDPRT to Parasolid and STEP</title>
+<title>openSW: SLDPRT to Parasolid and STEP, SLDDRW on screen</title>
 <style>
   :root {
     --fond: #15171c; --carte: #1d2027; --trait: #2c313b;
@@ -301,6 +369,27 @@ HTML = r"""<!doctype html>
     width: 130px; padding: 7px 10px; border-radius: 7px; font: inherit;
     background: #262b34; color: var(--texte); border: 1px solid var(--trait);
   }
+  #plan-carte { display: none; }
+  .onglets { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .onglets button { flex: 0 0 auto; padding: 7px 12px; font-weight: 500; }
+  .onglets button.choisi { background: #34405a; border-color: #4d5f86; }
+  #plan {
+    width: 100%; height: 560px; border-radius: 8px; background: #b9bcc2;
+    overflow: hidden; cursor: grab; touch-action: none;
+  }
+  #plan:active { cursor: grabbing; }
+  #plan svg { width: 100%; height: 100%; display: block; }
+  #plan .papier { fill: #fbfbf8; }
+  /* Colours and fonts read from the file are attributes: CSS only gives
+     the default, without overriding them. */
+  #plan .trait { stroke: #1b1e24; }
+  #plan .trait * { stroke-width: 1.2px; vector-effect: non-scaling-stroke; }
+  #plan .plein:not([fill]) { fill: #1b1e24; }
+  #plan text:not([fill]) { fill: #1b1e24; }
+  #plan text:not([font-family]) { font-family: "Century Gothic", ui-sans-serif, sans-serif; }
+  #plan .trait .choisi { stroke: #f0a35e; stroke-width: 3px; }
+  #plan .plein.choisi { fill: #f0a35e; }
+  #plan text.choisi { fill: #f0a35e; }
   a.telecharger {
     display: inline-block; margin-top: 12px; padding: 10px 16px;
     background: #1f3a29; border: 1px solid #2f6b43; border-radius: 8px;
@@ -309,14 +398,15 @@ HTML = r"""<!doctype html>
 </style>
 <main>
   <h1>openSW</h1>
-  <p class="sous">SolidWorks part to Parasolid or STEP.</p>
+  <p class="sous">SolidWorks part to Parasolid or STEP; SolidWorks drawing on screen.</p>
 
   <div class="carte">
     <input type="file" id="fichier"
-           accept=".SLDPRT,.sldprt,.x_t,.X_T,.x_b,.X_B,.xmt_txt,.xmt_bin">
+           accept=".SLDPRT,.sldprt,.x_t,.X_T,.x_b,.X_B,.xmt_txt,.xmt_bin,.SLDDRW,.slddrw">
     <div class="boutons">
       <button id="btn-parasolid" disabled>Export to Parasolid (.x_t)</button>
       <button id="btn-step" disabled>Export to STEP</button>
+      <button id="btn-plan" disabled>View drawing</button>
     </div>
     <div id="lien"></div>
   </div>
@@ -330,6 +420,19 @@ HTML = r"""<!doctype html>
       <input id="vue-cherche" placeholder="F123…" spellcheck="false">
       <button id="vue-trouver">Find</button>
       <button id="vue-recadrer">Reset view</button>
+    </div>
+  </div>
+
+  <div class="carte" id="plan-carte">
+    <div class="onglets" id="plan-onglets"></div>
+    <div id="plan"></div>
+    <div class="vue-barre">
+      <span id="plan-info" class="vide">Click a stroke to read its name.
+      Drag: pan · wheel: zoom.</span>
+      <button id="plan-copier" disabled>Copy name</button>
+      <input id="plan-cherche" placeholder="E123, A456…" spellcheck="false">
+      <button id="plan-trouver">Find</button>
+      <button id="plan-recadrer">Reset view</button>
     </div>
   </div>
 
@@ -357,9 +460,13 @@ function ligne(l) {
 }
 
 function actifs(oui) {
-  const prêt = oui && $("fichier").files.length;
-  $("btn-parasolid").disabled = !prêt;
-  $("btn-step").disabled = !prêt;
+  const f = $("fichier").files[0];
+  const prêt = oui && !!f;
+  // A drawing is viewed, not converted.
+  const plan = prêt && /\.slddrw$/i.test(f.name);
+  $("btn-parasolid").disabled = !prêt || plan;
+  $("btn-step").disabled = !prêt || plan;
+  $("btn-plan").disabled = !plan;
 }
 
 $("fichier").addEventListener("change", () => {
@@ -375,6 +482,7 @@ async function exporter(route) {
   log.innerHTML = ""; vide = true;
 
   $("vue-carte").style.display = "none";
+  $("plan-carte").style.display = "none";
   const r = await fetch("/export?route=" + route +
                         "&nom=" + encodeURIComponent(f.name),
                        { method: "POST", body: await f.arrayBuffer() });
@@ -399,6 +507,7 @@ async function exporter(route) {
     }
     if (état.fini) {
       if (état.vue) montrer(await (await fetch(`/vue?job=${job}`)).json());
+      if (état.plan) planche(await (await fetch(`/plan?job=${job}`)).json());
       break;
     }
     await new Promise((r) => setTimeout(r, 250));
@@ -697,6 +806,147 @@ function trouver() {
 $("vue-trouver").onclick = trouver;
 $("vue-cherche").addEventListener("keydown", (e) => { if (e.key === "Enter") trouver(); });
 
+// ------------------------------------------------------------- drawing
+// The SVG comes from the server as is; the page only frames it. Zoom and
+// pan rewrite the viewBox: strokes keep their screen width
+// (vector-effect), whatever the scale.
+
+const P = { feuilles: [], rang: 0, vb: null, plein: null, sel: null };
+
+function planche(plan) {
+  P.feuilles = plan.feuilles;
+  $("plan-carte").style.display = "block";
+  const onglets = $("plan-onglets");
+  onglets.innerHTML = "";
+  plan.feuilles.forEach((f, i) => {
+    const b = document.createElement("button");
+    b.textContent = f.nom + (f.active ? " ●" : "");
+    b.onclick = () => feuille(i);
+    onglets.append(b);
+  });
+  feuille(Math.max(0, plan.feuilles.findIndex((f) => f.active)));
+}
+
+function feuille(i) {
+  P.rang = i;
+  [...$("plan-onglets").children].forEach((b, j) => b.classList.toggle("choisi", i === j));
+  $("plan").innerHTML = P.feuilles[i].svg;
+  const svg = $("plan").querySelector("svg");
+  svg.removeAttribute("width"); svg.removeAttribute("height");
+  const vb = svg.viewBox.baseVal;
+  P.plein = { x: vb.x, y: vb.y, w: vb.width, h: vb.height };
+  P.sel = null;
+  cadrer({ ...P.plein });
+  const f = P.feuilles[i];
+  $("plan-info").textContent = `${f.nom}: ${f.elements} elements, ` +
+    `${f.vues.length} view(s). Click a stroke to read its name.`;
+  $("plan-copier").disabled = true;
+  if (!P.branché) { brancherPlan($("plan")); P.branché = true; }
+}
+
+function cadrer(vb) {
+  P.vb = vb;
+  const svg = $("plan").querySelector("svg");
+  if (svg) svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+}
+
+// The sheet point under the pointer, in viewBox units.
+function sousSouris(e) {
+  const svg = $("plan").querySelector("svg");
+  const pt = svg.createSVGPoint();
+  pt.x = e.clientX; pt.y = e.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+function désigner(el) {
+  if (P.sel) P.sel.classList.remove("choisi");
+  P.sel = el;
+  const info = $("plan-info");
+  if (!el) {
+    info.textContent = "No stroke under the pointer.";
+    $("plan-copier").disabled = true;
+    return;
+  }
+  el.classList.add("choisi");
+  info.innerHTML = "";
+  const b = document.createElement("b");
+  b.textContent = el.dataset.nom;
+  const vue = el.closest("[data-vue]");
+  const quoi = { line: "segment", circle: "circle", path: "arc", polygon: "polygon",
+                 polyline: "edge", text: "text" }[el.tagName] || el.tagName;
+  info.append(b, ` · ${quoi}` + (vue ? ` · ${vue.dataset.vue}` : "") +
+              (el.dataset.corps ? ` · body ${el.dataset.corps}` : ""));
+  $("plan-copier").disabled = false;
+}
+
+function brancherPlan(zone) {
+  let glisse = null;
+  zone.addEventListener("pointerdown", (e) => {
+    zone.setPointerCapture(e.pointerId);
+    glisse = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY };
+  });
+  zone.addEventListener("pointermove", (e) => {
+    if (!glisse || !P.vb) return;
+    const r = zone.getBoundingClientRect();
+    const k = Math.max(P.vb.w / r.width, P.vb.h / r.height);
+    P.vb.x -= (e.clientX - glisse.x) * k;
+    P.vb.y -= (e.clientY - glisse.y) * k;
+    glisse.x = e.clientX; glisse.y = e.clientY;
+    cadrer(P.vb);
+  });
+  zone.addEventListener("pointerup", (e) => {
+    if (glisse && Math.hypot(e.clientX - glisse.x0, e.clientY - glisse.y0) < 4) {
+      // A thin stroke is hard to hit: look for the nearest named stroke a
+      // few pixels around the click. Pointer capture is released first,
+      // otherwise elementFromPoint sees the zone.
+      zone.releasePointerCapture(e.pointerId);
+      let el = null;
+      for (let d = 0; d <= 4 && !el; d += 2)
+        for (const [dx, dy] of [[0, 0], [d, 0], [-d, 0], [0, d], [0, -d]]) {
+          const t = document.elementFromPoint(e.clientX + dx, e.clientY + dy);
+          el = t && t.closest ? t.closest("[data-nom]") : null;
+          if (el) break;
+        }
+      désigner(el);
+    }
+    glisse = null;
+  });
+  zone.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    if (!P.vb) return;
+    const f = Math.exp(e.deltaY * 0.0015);
+    const p = sousSouris(e);
+    cadrer({ x: p.x - (p.x - P.vb.x) * f, y: p.y - (p.y - P.vb.y) * f,
+             w: P.vb.w * f, h: P.vb.h * f });
+  }, { passive: false });
+}
+
+function trouverTrait() {
+  const nom = $("plan-cherche").value.trim().toUpperCase();
+  if (!nom || !P.feuilles.length) return;
+  // The name may be on another sheet than the one shown.
+  for (let i = 0; i < P.feuilles.length; i++) {
+    if (!P.feuilles[i].svg.includes(`data-nom="${nom}"`)) continue;
+    if (i !== P.rang) feuille(i);
+    const el = $("plan").querySelector(`[data-nom="${nom}"]`);
+    const b = el.getBBox(), marge = Math.max(b.width, b.height, 2) * 1.5;
+    cadrer({ x: b.x - marge, y: b.y - marge, w: b.width + 2 * marge,
+             h: b.height + 2 * marge });
+    désigner(el);
+    return;
+  }
+  $("plan-info").textContent = `${nom}: not in this drawing.`;
+}
+
+$("plan-recadrer").onclick = () => P.plein && cadrer({ ...P.plein });
+$("plan-copier").onclick = () => {
+  if (P.sel) navigator.clipboard.writeText(P.sel.dataset.nom);
+};
+$("plan-trouver").onclick = trouverTrait;
+$("plan-cherche").addEventListener("keydown", (e) => { if (e.key === "Enter") trouverTrait(); });
+
+$("btn-plan").onclick = () => exporter("plan");
+
 $("btn-parasolid").onclick = () => exporter("parasolid");
 $("btn-step").onclick = () => exporter("step");
 </script>
@@ -754,10 +1004,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "fini": job.done,
                 "fichier": job.result.name if job.result else "",
                 "vue": job.vue is not None,
+                "plan": job.plan is not None,
             })
             return
         if route == "/vue" and job.vue:
             self._send(200, "application/json", job.vue)
+            return
+        if route == "/plan" and job.plan:
+            self._send(200, "application/json", job.plan)
             return
         if route == "/download" and job.result:
             self._send(
@@ -773,7 +1027,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         q = self._query()
         route = q.get("route", "")
-        if route not in ROUTES:
+        if route not in ROUTES and route != ROUTE_PLAN:
             self._send(400, "text/plain", b"unknown route")
             return
         try:
@@ -790,7 +1044,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         job = Job(nom, route)
         with JOBS_LOCK:
             JOBS[job.id] = job
-        threading.Thread(target=run, args=(job, data), daemon=True).start()
+        cible = voir if route == ROUTE_PLAN else run
+        threading.Thread(target=cible, args=(job, data), daemon=True).start()
         self._json({"job": job.id})
 
 
