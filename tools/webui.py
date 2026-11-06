@@ -28,6 +28,7 @@ import time
 import traceback
 import uuid
 import webbrowser
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -218,11 +219,12 @@ def _balayer() -> None:
 ROUTE_PLAN = "plan"
 
 
-def plan_json(source: Path) -> dict:
-    """A drawing ready for the page: each sheet as SVG."""
-    from sldprt.drawing import read_drawing, to_svg
+def plan_json(source) -> dict:
+    """A drawing (a path, or one already read) ready for the page: each
+    sheet as SVG."""
+    from sldprt.drawing import Drawing, read_drawing, to_svg
 
-    dessin = read_drawing(source)
+    dessin = source if isinstance(source, Drawing) else read_drawing(source)
     return {
         "feuilles": [
             {
@@ -242,7 +244,8 @@ def plan_json(source: Path) -> dict:
 def voir(job: Job, data: bytes) -> None:
     """Read a drawing and keep its SVG in memory for the page.
 
-    The uploaded file is written only while it is read, then deleted.
+    The uploaded file is written only while it is read, then deleted; the
+    DXF export stays until the purge.
     """
     say = job.journal.say
     try:
@@ -253,7 +256,10 @@ def voir(job: Job, data: bytes) -> None:
         say(f"reader: {version()}", "detail")
         say("drawing: sldprt.drawing.read_drawing()", "step")
         début = time.monotonic()
-        plan = plan_json(source)
+        from sldprt.drawing import read_drawing, to_dxf
+
+        dessin = read_drawing(source)
+        plan = plan_json(dessin)
         for f in plan["feuilles"]:
             vues = ", ".join(
                 f"{v['nom']} ({v['aretes']} edges, scale {v['echelle']:g})"
@@ -265,16 +271,33 @@ def voir(job: Job, data: bytes) -> None:
         say(f"{len(plan['feuilles'])} sheet(s) read in "
             f"{time.monotonic() - début:.1f} s", "ok")
         job.plan = json.dumps(plan).encode()
+        job.result = exporter_plan(dessin, source, to_dxf)
+        say(f"{job.result.name} ready to download (DXF R12, mm)", "ok")
     except Exception as échec:
         job.failed = True
         say(f"{type(échec).__name__}: {échec}", "err")
         for ligne in traceback.format_exc().splitlines()[-6:]:
             say(ligne.rstrip(), "detail")
     finally:
-        if job.dossier is not None:
-            shutil.rmtree(job.dossier, ignore_errors=True)
+        effacer_source(job)
         job.fini_a = time.monotonic()
         job.done = True
+
+
+def exporter_plan(dessin, source: Path, to_dxf) -> Path:
+    """The drawing as DXF next to *source*: one file per sheet, zipped when
+    there are several."""
+    if len(dessin.feuilles) == 1:
+        sortie = source.with_suffix(".dxf")
+        sortie.write_bytes(to_dxf(dessin.feuilles[0]).encode("cp1252"))
+        return sortie
+    sortie = source.with_suffix(".zip")
+    with zipfile.ZipFile(sortie, "w", zipfile.ZIP_DEFLATED) as z:
+        for i, f in enumerate(dessin.feuilles, start=1):
+            nom = re.sub(r"[^\w -]", "_", f.nom).strip() or str(i)
+            z.writestr(f"{source.stem}-{i:02d}-{nom}.dxf",
+                       to_dxf(f).encode("cp1252"))
+    return sortie
 
 
 #: The other route that converts nothing: an assembly, shown in 3D from the
@@ -285,9 +308,10 @@ ROUTE_ASSEMBLAGE = "assemblage"
 def voir_assemblage(job: Job, data: bytes) -> None:
     """Read an assembly and keep its 3D view in memory for the page.
 
-    The uploaded file is written only while it is read, then deleted.
+    The uploaded file is written only while it is read, then deleted; the
+    STL export stays until the purge.
     """
-    from sldprt.assembly import read_assembly, to_view
+    from sldprt.assembly import read_assembly, to_stl, to_view
 
     say = job.journal.say
     try:
@@ -311,14 +335,18 @@ def voir_assemblage(job: Job, data: bytes) -> None:
             f"{time.monotonic() - début:.1f} s (SolidWorks display mesh, "
             "not the exact geometry)", "ok")
         job.vue = json.dumps(vue).encode()
+        sortie = dossier / (source.stem + ".stl")
+        sortie.write_bytes(to_stl(asm))
+        job.result = sortie
+        say(f"{sortie.name} ready to download, {_human(sortie.stat().st_size)} "
+            "(display mesh, mm)", "ok")
     except Exception as échec:
         job.failed = True
         say(f"{type(échec).__name__}: {échec}", "err")
         for ligne in traceback.format_exc().splitlines()[-6:]:
             say(ligne.rstrip(), "detail")
     finally:
-        if job.dossier is not None:
-            shutil.rmtree(job.dossier, ignore_errors=True)
+        effacer_source(job)
         job.fini_a = time.monotonic()
         job.done = True
 
@@ -612,6 +640,7 @@ HTML = r"""<!doctype html>
       <input id="plan-cherche" placeholder="E123, A456…" spellcheck="false">
       <button id="plan-trouver" data-t="trouver">Find</button>
       <button id="plan-recadrer" data-t="recadrer">Fit</button>
+      <button id="plan-svg" data-t="svg-feuille">SVG of this sheet</button>
     </div>
   </div>
 
@@ -658,6 +687,7 @@ const TEXTES = {
       "flèches : 15°, Maj : 90°.",
     "aide-plan": "Cliquez sur un trait pour lire son nom. Glisser : déplacer · molette : zoomer.",
     copier: "Copier le nom", trouver: "Trouver", recadrer: "Recadrer",
+    "svg-feuille": "SVG de cette feuille",
     "journal-vide": "Le journal s'écrira ici.",
     journal: "Journal", "copier-journal": "Copier le journal", copié: "copié",
     "plein-écran": "Pleine page (Échap pour revenir)",
@@ -701,6 +731,7 @@ const TEXTES = {
       "middle double-click or F: zoom to fit · arrows: 15°, Shift: 90°.",
     "aide-plan": "Click a line to read its name. Drag: pan · wheel: zoom.",
     copier: "Copy name", trouver: "Find", recadrer: "Fit",
+    "svg-feuille": "SVG of this sheet",
     "journal-vide": "The log will appear here.",
     journal: "Log", "copier-journal": "Copy the log", copié: "copied",
     "plein-écran": "Full page (Esc to go back)",
@@ -1607,6 +1638,18 @@ function trouverTrait() {
 }
 
 $("plan-recadrer").onclick = () => P.plein && cadrer({ ...P.plein });
+// The sheet as the server drew it, before zoom and pan touched its viewBox.
+$("plan-svg").onclick = () => {
+  const f = P.feuilles[P.rang];
+  if (!f) return;
+  const base = ($("fichier").files[0]?.name || "drawing").replace(/\.[^.]*$/, "");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([f.svg], { type: "image/svg+xml" }));
+  a.download = `${base}-${f.nom}.svg`.replace(/[\\/:*?"<>|]/g, "_");
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+};
+
 $("plan-copier").onclick = () => {
   if (P.sel) navigator.clipboard.writeText(P.sel.dataset.nom);
 };
