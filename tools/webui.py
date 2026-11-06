@@ -782,7 +782,7 @@ $("fichier").addEventListener("change", () => {
 function charge(texte, part) {
   $("charge").hidden = false;
   $("charge").classList.toggle("attente", part === undefined);
-  if (part !== undefined) $("charge-barre").style.width = (100 * part).toFixed(1) + "%";
+  $("charge-barre").style.width = part === undefined ? "" : (100 * part).toFixed(1) + "%";
   $("charge-texte").textContent = texte;
 }
 
