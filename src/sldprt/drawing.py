@@ -673,12 +673,15 @@ def to_svg(feuille: Feuille) -> str:
     x0, y0, x1, y1 = _boite(feuille)
     x0, y0, x1, y1 = min(x0, 0.0), min(y0, 0.0), max(x1, w), max(y1, h)
     vb = f"{_f(x0)} {_f(h - y1)} {_f(x1 - x0)} {_f(y1 - y0)}"
+    # Colours and widths written in the file, so that it reads on its
+    # own, outside the page (whose stylesheet takes precedence).
     out = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{vb}" '
         f'width="{_f(x1 - x0)}mm" height="{_f(y1 - y0)}mm" '
-        f'data-feuille="{_esc(feuille.nom)}">',
-        f'<rect class="papier" x="0" y="0" width="{_f(w)}" height="{_f(h)}"/>',
-        '<g class="trait" fill="none" stroke-linecap="round" stroke-linejoin="round">',
+        f'data-feuille="{_esc(feuille.nom)}" font-family="Century Gothic, sans-serif">',
+        f'<rect class="papier" x="0" y="0" width="{_f(w)}" height="{_f(h)}" fill="#fff"/>',
+        '<g class="trait" fill="none" stroke="#000" stroke-width="0.25" '
+        'stroke-linecap="round" stroke-linejoin="round">',
     ]
     for el in feuille.elements:
         c = _teinte(el, "stroke")
@@ -700,8 +703,9 @@ def to_svg(feuille: Feuille) -> str:
                            f'A{_f(el.r)} {_f(el.r)} 0 {grand} 0 {_f(x1)} {y(y1)}"/>')
         elif isinstance(el, Polygone):
             pts = " ".join(f"{_f(px)},{y(py)}" for px, py in el.points)
+            plein = _teinte(el, "stroke", "fill") or ' fill="#000"'
             out.append(f'<polygon data-nom="{el.nom}" class="plein"'
-                       f'{_teinte(el, "stroke", "fill")} points="{pts}"/>')
+                       f'{plein} points="{pts}"/>')
     for vue in feuille.vues:
         out.append(f'<g class="vue" data-vue="{_esc(vue.nom)}">')
         for a in vue.aretes:
