@@ -415,6 +415,9 @@ HTML = r"""<!doctype html>
   /* Progress bar: measured during upload, indeterminate while the server
      works (it cannot tell how much is left). */
   #local { margin: 10px 0 0; color: var(--doux); font-size: 13px; }
+  #exemples { margin: 10px 0 0; color: var(--doux); font-size: 13px;
+              display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+  #exemples button { flex: 0 0 auto; padding: 6px 10px; font-size: 13px; }
   #charge { margin-top: 14px; }
   .charge-piste { height: 6px; border-radius: 3px; background: #262b33; overflow: hidden; }
   #charge-barre { height: 100%; width: 0; background: #e1251b; border-radius: 3px;
@@ -546,6 +549,13 @@ HTML = r"""<!doctype html>
     </label>
     <!-- Shown by the published page only (statique.js): the local server
          does receive the file. -->
+    <!-- Public-domain examples (NIST), fetched from GitHub, which allows it. -->
+    <p id="exemples"><span data-t="exemples">No file at hand? Open an example:</span>
+      <button class="exemple" data-t="ex-piece" data-url="https://raw.githubusercontent.com/cadmpeg/cadmpeg/3dc401df603b99f61f7800b05f7027e54f111eea/corpus/nist-pmi/sldprt/nist_ftc_08_asme1_rc_sw1802.SLDPRT"
+              data-nom="nist_ftc_08_asme1_rc_sw1802.SLDPRT">NIST part</button>
+      <button class="exemple" data-t="ex-asm" data-url="https://raw.githubusercontent.com/cehaho/OpenSW/main/examples/nist_mtc_crada_assembly_rev-D.SLDASM"
+              data-nom="nist_mtc_crada_assembly_rev-D.SLDASM">NIST assembly</button>
+    </p>
     <p id="local" data-t="local" hidden>Your file is not uploaded to any server:
       it is read and converted in your browser.</p>
     <div id="charge" hidden>
@@ -629,6 +639,9 @@ const TEXTES = {
   fr: {
     titre: "openSW — pièces, assemblages et mises en plan SolidWorks",
     depot: "Déposez un fichier", "depot-ou": "ou cliquez",
+    exemples: "Pas de fichier sous la main ? Ouvrez un exemple :",
+    "ex-piece": "Pièce NIST", "ex-asm": "Assemblage NIST", "ex-plan": "Mise en plan",
+    "ex-charge": (n) => `Téléchargement de l'exemple ${n}`,
     local: "Votre fichier n'est envoyé sur aucun serveur : il est lu et converti " +
       "dans votre navigateur.",
     "exporter-xt": "Exporter aussi en Parasolid",
@@ -670,6 +683,9 @@ const TEXTES = {
   en: {
     titre: "openSW — SolidWorks parts, assemblies and drawings",
     depot: "Drop a file", "depot-ou": "or click",
+    exemples: "No file at hand? Open an example:",
+    "ex-piece": "NIST part", "ex-asm": "NIST assembly", "ex-plan": "Drawing",
+    "ex-charge": (n) => `Downloading the example ${n}`,
     local: "Your file is not uploaded to any server: it is read and converted " +
       "in your browser.",
     "exporter-xt": "Also export to Parasolid",
@@ -786,6 +802,22 @@ $("fichier").addEventListener("change", () => {
   exporter(/\.slddrw$/i.test(f.name) ? "plan"
            : /\.sldasm$/i.test(f.name) ? "assemblage" : "step");
 });
+
+// An example is downloaded, then opened as if it had been dropped.
+document.querySelectorAll("button.exemple").forEach((b) => b.addEventListener("click", async () => {
+  charge(t("ex-charge", b.dataset.nom));
+  try {
+    const r = await fetch(b.dataset.url);
+    if (!r.ok) throw new Error(t("serveur-répond", r.status));
+    const dt = new DataTransfer();
+    dt.items.add(new File([await r.blob()], b.dataset.nom));
+    $("fichier").files = dt.files;
+    $("fichier").dispatchEvent(new Event("change"));
+  } catch (e) {
+    $("charge").hidden = true;
+    ligne({ ms: 0, kind: "err", text: String(e.message || e) });
+  }
+}));
 
 // `part` in [0, 1], or undefined when progress cannot be measured.
 function charge(texte, part) {
