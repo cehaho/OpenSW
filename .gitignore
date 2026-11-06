@@ -12,3 +12,4 @@ out/
 
 # Parasolid schemas (Siemens files, see README)
 /schemas/
+_site/
