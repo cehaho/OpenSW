@@ -84,21 +84,28 @@ def evaluate_bspline_surface(spec, u, v):
     u_basis = _basis(spec["u_knots"], u_span, spec["u_degree"], u)
     v_basis = _basis(spec["v_knots"], v_span, spec["v_degree"], v)
     net, weights = spec["net"], spec["weights"]
-    total = [0.0, 0.0, 0.0]
+    # Coordinates unrolled: the same products, summed in the same order,
+    # hence the same floats.
+    u_degree, v_degree = spec["u_degree"], spec["v_degree"]
+    x = y = z = 0.0
     divisor = 0.0
+    first_column = v_span - v_degree
     for i, u_value in enumerate(u_basis):
-        row = u_span - spec["u_degree"] + i
+        row = u_span - u_degree + i
+        net_row = net[row]
+        weight_row = weights[row] if weights else None
         for j, v_value in enumerate(v_basis):
-            column = v_span - spec["v_degree"] + j
-            weight = weights[row][column] if weights else 1.0
+            column = first_column + j
+            weight = weight_row[column] if weights else 1.0
             scaled = u_value * v_value * weight
-            point = net[row][column]
-            for k in range(3):
-                total[k] += scaled * point[k]
+            point = net_row[column]
+            x += scaled * point[0]
+            y += scaled * point[1]
+            z += scaled * point[2]
             divisor += scaled
     if divisor == 0.0:
         raise EvaluateError("a rational surface evaluates to a zero weight")
-    return [c / divisor for c in total]
+    return [x / divisor, y / divisor, z / divisor]
 
 
 def _basis_and_derivative(knots, span, degree, t):
@@ -151,10 +158,16 @@ def bspline_surface_partials(spec, u, v):
             b = nu[i] * nv[j] * weight
             b_u = du[i] * nv[j] * weight
             b_v = nu[i] * dv[j] * weight
-            for k in range(3):
-                a[k] += b * point[k]
-                a_u[k] += b_u * point[k]
-                a_v[k] += b_v * point[k]
+            px, py, pz = point
+            a[0] += b * px
+            a[1] += b * py
+            a[2] += b * pz
+            a_u[0] += b_u * px
+            a_u[1] += b_u * py
+            a_u[2] += b_u * pz
+            a_v[0] += b_v * px
+            a_v[1] += b_v * py
+            a_v[2] += b_v * pz
             w += b
             w_u += b_u
             w_v += b_v
@@ -373,6 +386,29 @@ def _read_nurbs_surface(model, node):
 
 
 def _frame(values, origin_key, axis_key):
+    """Origin, axis and the two in-plane directions of a surface or conic.
+
+    Memoised on the identity of *values*, which nothing mutates in place
+    (``xt.edit`` copies before writing): it is asked for at every evaluated
+    point. The entry holds *values*, so an ``id`` cannot be reused while it
+    lives, and the table is emptied past :data:`_FRAMES_MAX`.
+    """
+    key = (id(values), origin_key, axis_key)
+    kept = _FRAMES.get(key)
+    if kept is not None and kept[0] is values:
+        return kept[1]
+    frame = _build_frame(values, origin_key, axis_key)
+    if len(_FRAMES) >= _FRAMES_MAX:
+        _FRAMES.clear()
+    _FRAMES[key] = (values, frame)
+    return frame
+
+
+_FRAMES: dict = {}
+_FRAMES_MAX = 65536
+
+
+def _build_frame(values, origin_key, axis_key):
     origin = values[origin_key]
     axis = _unit(values[axis_key])
     reference = values.get("x_axis")
@@ -384,6 +420,14 @@ def _frame(values, origin_key, axis_key):
 
 
 def _unit(v):
+    # `sum` over a tuple, not a generator: the same (compensated, since
+    # Python 3.12) summation, hence the same floats, without the generator.
+    if len(v) == 3:
+        a, b, c = v
+        n = math.sqrt(sum((a * a, b * b, c * c)))
+        if n == 0.0:
+            raise EvaluateError("a direction of zero length")
+        return [a / n, b / n, c / n]
     n = math.sqrt(sum(c * c for c in v))
     if n == 0.0:
         raise EvaluateError("a direction of zero length")
@@ -397,6 +441,8 @@ def _cross(a, b):
 
 
 def _dot(a, b):
+    if len(a) == 3 and len(b) == 3:
+        return sum((a[0] * b[0], a[1] * b[1], a[2] * b[2]))
     return sum(x * y for x, y in zip(a, b, strict=True))
 
 
@@ -484,16 +530,14 @@ def _partials(model, node, u, v, step=DERIVATIVE_STEP):
                 t = min(max(t, low), high)
                 _point, du = bspline_curve_derivative(spec, t)
                 return du, _unit(node.values["sweep"])
-    du = [
-        (surface_point(model, node, u + step, v)[i]
-         - surface_point(model, node, u - step, v)[i]) / (2.0 * step)
-        for i in range(3)
-    ]
-    dv = [
-        (surface_point(model, node, u, v + step)[i]
-         - surface_point(model, node, u, v - step)[i]) / (2.0 * step)
-        for i in range(3)
-    ]
+    # Four evaluations, not twelve: an evaluation depends on its arguments
+    # only, so the differences are the same to the bit.
+    ahead, behind = (surface_point(model, node, u + step, v),
+                     surface_point(model, node, u - step, v))
+    above, below = (surface_point(model, node, u, v + step),
+                    surface_point(model, node, u, v - step))
+    du = [(ahead[i] - behind[i]) / (2.0 * step) for i in range(3)]
+    dv = [(above[i] - below[i]) / (2.0 * step) for i in range(3)]
     return du, dv
 
 
@@ -596,7 +640,9 @@ def surface_point(model, node, u, v):
     if name == "CYLINDER":
         origin, axis, x, y = _frame(values, "pvec", "axis")
         r = values["radius"]
-        return [origin[i] + r * (math.cos(u) * x[i] + math.sin(u) * y[i])
+        # cos and sin once per point, not once per coordinate.
+        cu, su = math.cos(u), math.sin(u)
+        return [origin[i] + r * (cu * x[i] + su * y[i])
                 + v * axis[i] for i in range(3)]
     if name == "CONE":
         origin, axis, x, y = _frame(values, "pvec", "axis")
@@ -605,22 +651,25 @@ def surface_point(model, node, u, v):
         if cos_a == 0.0:
             raise EvaluateError("a cone of half-angle 90 degrees")
         radius = values["radius"] + v * (sin_a / cos_a)
+        cu, su = math.cos(u), math.sin(u)
         return [origin[i] + v * axis[i]
-                + radius * (math.cos(u) * x[i] + math.sin(u) * y[i])
+                + radius * (cu * x[i] + su * y[i])
                 for i in range(3)]
     if name == "SPHERE":
         origin, axis, x, y = _frame(values, "centre", "axis")
         r = values["radius"]
-        return [origin[i] + r * (math.cos(v) * (math.cos(u) * x[i]
-                                                + math.sin(u) * y[i])
-                                 + math.sin(v) * axis[i]) for i in range(3)]
+        cu, su, cv, sv = math.cos(u), math.sin(u), math.cos(v), math.sin(v)
+        return [origin[i] + r * (cv * (cu * x[i] + su * y[i])
+                                 + sv * axis[i]) for i in range(3)]
     if name == "TORUS":
         origin, axis, x, y = _frame(values, "centre", "axis")
         major = values["major_radius"]
         minor = values["minor_radius"]
         ring = major + minor * math.cos(v)
-        return [origin[i] + ring * (math.cos(u) * x[i] + math.sin(u) * y[i])
-                + minor * math.sin(v) * axis[i] for i in range(3)]
+        cu, su = math.cos(u), math.sin(u)
+        height = minor * math.sin(v)
+        return [origin[i] + ring * (cu * x[i] + su * y[i])
+                + height * axis[i] for i in range(3)]
     if name == "B_SURFACE":
         return extended_bspline_surface(read_nurbs_surface(model, node), u, v)
     if name == "SWEPT_SURF":
