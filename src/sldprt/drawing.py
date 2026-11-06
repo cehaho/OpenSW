@@ -752,3 +752,79 @@ def _boite(feuille: Feuille) -> tuple[float, float, float, float]:
 def _esc(s: str) -> str:
     return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             .replace('"', "&quot;"))
+
+
+#: AutoCAD colour index of the plain colours a DXF R12 can carry.
+_ACI = {1: (255, 0, 0), 2: (255, 255, 0), 3: (0, 255, 0), 4: (0, 255, 255),
+        5: (0, 0, 255), 6: (255, 0, 255), 7: (0, 0, 0), 8: (128, 128, 128),
+        9: (192, 192, 192)}
+
+
+def _aci(couleur: str | None) -> int:
+    """The nearest colour index; 7 (black on paper) for print black."""
+    if couleur is None:
+        return 7
+    rgb = tuple(int(couleur[i:i + 2], 16) for i in (1, 3, 5))
+    return min(_ACI, key=lambda k: sum((a - b) ** 2 for a, b in zip(_ACI[k], rgb, strict=True)))
+
+
+def _calque(nom: str) -> str:
+    return re.sub(r"[^A-Z0-9_$-]", "_", nom.upper())[:31] or "_"
+
+
+def _dxf_texte(s: str) -> str:
+    """Text a cp1252 DXF can hold: other characters as ``\\U+XXXX``."""
+    return "".join(c if c.encode("cp1252", "ignore") else f"\\U+{ord(c):04X}"
+                   for c in s.replace("\n", " "))
+
+
+def to_dxf(feuille: Feuille) -> str:
+    """The sheet as DXF R12, in millimetres: encode it as cp1252.
+
+    Sheet elements go on layer ``SHEET``, texts on ``TEXT``, each view's
+    edges on a layer named after the view, the paper outline on ``PAPER``.
+    Colours are the nearest of the nine plain ones; filled shapes
+    (arrowheads) become closed outlines.
+    """
+    g = lambda v: f"{v:.10g}"  # noqa: E731
+    out = ["0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1009",
+           "9", "$DWGCODEPAGE", "3", "ANSI_1252", "9", "$INSUNITS", "70", "4",
+           "9", "$EXTMIN", "10", "0", "20", "0", "30", "0",
+           "9", "$EXTMAX", "10", g(feuille.largeur), "20", g(feuille.hauteur),
+           "30", "0", "0", "ENDSEC", "0", "SECTION", "2", "ENTITIES"]
+
+    def polyligne(points, calque, couleur, fermee):
+        out.extend(["0", "POLYLINE", "8", calque, "62", str(couleur), "66", "1",
+                    "10", "0", "20", "0", "30", "0", "70", "1" if fermee else "0"])
+        for x, y in points:
+            out.extend(["0", "VERTEX", "8", calque, "10", g(x), "20", g(y), "30", "0"])
+        out.extend(["0", "SEQEND", "8", calque])
+
+    w, h = feuille.largeur, feuille.hauteur
+    polyligne([(0, 0), (w, 0), (w, h), (0, h)], "PAPER", 8, True)
+    for el in feuille.elements:
+        c = str(_aci(el.couleur))
+        if isinstance(el, Segment):
+            out.extend(["0", "LINE", "8", "SHEET", "62", c, "10", g(el.x1),
+                        "20", g(el.y1), "30", "0", "11", g(el.x2), "21", g(el.y2),
+                        "31", "0"])
+        elif isinstance(el, Arc):
+            out.extend(["0", "CIRCLE" if el.cercle else "ARC", "8", "SHEET",
+                        "62", c, "10", g(el.cx), "20", g(el.cy), "30", "0",
+                        "40", g(el.r)])
+            if not el.cercle:
+                out.extend(["50", g(math.degrees(el.a0)), "51", g(math.degrees(el.a1))])
+        elif isinstance(el, Polygone):
+            polyligne(el.points, "SHEET", c, True)
+        elif isinstance(el, Texte):
+            # The stored point is the bottom of the text box; the baseline
+            # sits 0.289 h above it (see to_svg).
+            out.extend(["0", "TEXT", "8", "TEXT", "62", c, "10", g(el.x),
+                        "20", g(el.y + 0.289 * el.hauteur), "30", "0",
+                        "40", g(el.hauteur), "1", _dxf_texte(el.texte)])
+    for vue in feuille.vues:
+        calque = _calque(vue.nom)
+        for a in vue.aretes:
+            polyligne(a.points, calque, 7, False)
+    out.extend(["0", "ENDSEC", "0", "EOF"])
+    return "\n".join(out) + "\n"
