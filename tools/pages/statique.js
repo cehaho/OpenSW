@@ -74,6 +74,8 @@
     setTimeout(() => URL.revokeObjectURL(lien.href), 60000);
   });
 
+  document.getElementById("local").hidden = false;
+
   // Load the worker right away: Python takes a few seconds.
   travailleur.postMessage({ préparer: true });
 })();

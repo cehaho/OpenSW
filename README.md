@@ -1,12 +1,16 @@
 # openSW
 
 Convert SolidWorks part files (`.SLDPRT`) to Parasolid (`.x_t`) and STEP,
-without SolidWorks.
+without SolidWorks. View parts, assemblies (`.SLDASM`) and drawings
+(`.SLDDRW`) in a web page.
+
+**Try it online: <https://cehaho.github.io/OpenSW/>** — your file is not
+uploaded to any server: it is read and converted in your browser.
 
 ## Install
 
 ```sh
-git clone https://github.com/Emilien-Etadam/OpenSW
+git clone https://github.com/cehaho/OpenSW
 cd OpenSW
 pip install -e ".[occ]"
 ```
@@ -27,12 +31,16 @@ python tools/convert.py --help
 python tools/webui.py                          # http://127.0.0.1:8765
 ```
 
-Upload a part, download the `.x_t` or STEP, and view it in 3D: click a face
-to read its name, `F<node>`. Uploads are deleted after conversion, results
+Drop a part, download the `.x_t` or STEP, and view it in 3D: click a face
+to read its name, `F<node>`. The page is in English, with a French option.
+Here the file is sent to this local server; uploads are deleted after conversion, results
 after 30 minutes. `PORT` and `OPENSW_HOST` set the address; on a public
 server, put an authenticating reverse proxy in front.
 
 ## In the browser, without a server
+
+This is the page published at <https://cehaho.github.io/OpenSW/>. To build
+it yourself:
 
 ```sh
 python tools/pages.py                          # writes _site/
@@ -41,7 +49,8 @@ python tools/pages.py                          # writes _site/
 `_site/` is the same page, served by any static host (GitHub Pages): the
 converter runs in the browser under [Pyodide](https://pyodide.org), and the
 3D view uses [occt-import-js](https://github.com/kovacsv/occt-import-js)
-(OpenCASCADE in WebAssembly). The file never leaves the browser. The STEP is
+(OpenCASCADE in WebAssembly). The file never leaves the browser: nothing is
+uploaded, only the page and its libraries are downloaded. The STEP is
 the same as the desktop one except for the last digits (WebAssembly's
 `sin`/`cos`) and LF line endings.
 
@@ -79,8 +88,22 @@ Not included: they are Siemens files. Built-in facts cover SolidWorks parts.
 If one is asked for, copy `pschema` and `schema_18` from your SolidWorks
 installation into `schemas/`.
 
+## Licence
+
+openSW is free software under the GNU Affero General Public License v3.0
+only (AGPL-3.0-only), see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+In short, and the licence text prevails:
+
+- You may use, study, copy and modify it, for any purpose.
+- If you distribute it, modified or not, you must do so under the same
+  licence, with its source code.
+- If you let people use a modified version over a network (a web service,
+  for instance), you must offer them its complete source code (section 13).
+- It comes with no warranty.
+
 ## Legal
 
 Interoperability work on files the author owns. This repository contains no
-SolidWorks or Parasolid code. AGPL-3.0-only, see [`LICENSE`](LICENSE) and
-[`NOTICE`](NOTICE).
+SolidWorks or Parasolid code. openSW is not affiliated with Dassault
+Systèmes or Siemens; SolidWorks and Parasolid are trademarks of their
+respective owners.

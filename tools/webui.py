@@ -414,6 +414,7 @@ HTML = r"""<!doctype html>
   [hidden] { display: none !important; }
   /* Progress bar: measured during upload, indeterminate while the server
      works (it cannot tell how much is left). */
+  #local { margin: 10px 0 0; color: var(--doux); font-size: 13px; }
   #charge { margin-top: 14px; }
   .charge-piste { height: 6px; border-radius: 3px; background: #262b33; overflow: hidden; }
   #charge-barre { height: 100%; width: 0; background: #e1251b; border-radius: 3px;
@@ -543,6 +544,10 @@ HTML = r"""<!doctype html>
       <input type="file" id="fichier"
              accept=".SLDPRT,.sldprt,.x_t,.X_T,.x_b,.X_B,.xmt_txt,.xmt_bin,.SLDDRW,.slddrw,.SLDASM,.sldasm">
     </label>
+    <!-- Shown by the published page only (statique.js): the local server
+         does receive the file. -->
+    <p id="local" data-t="local" hidden>Your file is not uploaded to any server:
+      it is read and converted in your browser.</p>
     <div id="charge" hidden>
       <div class="charge-piste"><div id="charge-barre"></div></div>
       <div id="charge-texte"></div>
@@ -618,12 +623,14 @@ HTML = r"""<!doctype html>
 const $ = (id) => document.getElementById(id);
 
 // ------------------------------------------------------------ languages
-// French or English: the browser language first, then the user's choice
-// (kept in this browser only). The log comes from the server, in English.
+// English by default, or French if chosen (kept in this browser only).
+// The log comes from the server, in English.
 const TEXTES = {
   fr: {
     titre: "openSW — pièces, assemblages et mises en plan SolidWorks",
     depot: "Déposez un fichier", "depot-ou": "ou cliquez",
+    local: "Votre fichier n'est envoyé sur aucun serveur : il est lu et converti " +
+      "dans votre navigateur.",
     "exporter-xt": "Exporter aussi en Parasolid",
     télécharger: (n) => `Télécharger ${n}`,
     "vue-face": "Face", "vue-arrière": "Arrière", "vue-gauche": "Gauche",
@@ -663,6 +670,8 @@ const TEXTES = {
   en: {
     titre: "openSW — SolidWorks parts, assemblies and drawings",
     depot: "Drop a file", "depot-ou": "or click",
+    local: "Your file is not uploaded to any server: it is read and converted " +
+      "in your browser.",
     "exporter-xt": "Also export to Parasolid",
     télécharger: (n) => `Download ${n}`,
     "vue-face": "Front", "vue-arrière": "Back", "vue-gauche": "Left",
@@ -701,12 +710,12 @@ const TEXTES = {
   },
 };
 
-let LANGUE = "fr";
+let LANGUE = "en";
 try { LANGUE = localStorage.getItem("opensw-langue") || ""; } catch (e) { LANGUE = ""; }
-if (!TEXTES[LANGUE]) LANGUE = /^fr\b/i.test(navigator.language || "") ? "fr" : "en";
+if (!TEXTES[LANGUE]) LANGUE = "en";
 
 function t(clé, ...args) {
-  const v = TEXTES[LANGUE][clé] ?? TEXTES.fr[clé];
+  const v = TEXTES[LANGUE][clé] ?? TEXTES.en[clé];
   return typeof v === "function" ? v(...args) : v;
 }
 
