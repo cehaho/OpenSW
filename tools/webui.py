@@ -549,12 +549,15 @@ HTML = r"""<!doctype html>
     </label>
     <!-- Shown by the published page only (statique.js): the local server
          does receive the file. -->
-    <!-- Public-domain examples (NIST), fetched from GitHub, which allows it. -->
+    <!-- Examples fetched from GitHub, which allows it: NIST models (public domain)
+         and a drawing from andyeske/How-to-CAD-Almost-Anything (MIT). -->
     <p id="exemples"><span data-t="exemples">No file at hand? Open an example:</span>
       <button class="exemple" data-t="ex-piece" data-url="https://raw.githubusercontent.com/cadmpeg/cadmpeg/3dc401df603b99f61f7800b05f7027e54f111eea/corpus/nist-pmi/sldprt/nist_ftc_08_asme1_rc_sw1802.SLDPRT"
               data-nom="nist_ftc_08_asme1_rc_sw1802.SLDPRT">NIST part</button>
       <button class="exemple" data-t="ex-asm" data-url="https://raw.githubusercontent.com/cehaho/OpenSW/main/examples/nist_mtc_crada_assembly_rev-D.SLDASM"
               data-nom="nist_mtc_crada_assembly_rev-D.SLDASM">NIST assembly</button>
+      <button class="exemple" data-t="ex-plan" data-url="https://raw.githubusercontent.com/andyeske/How-to-CAD-Almost-Anything/f2bd87ed5b267ba4f962919ba3ab73641bfca5ad/Session%20Files/Session%206/2x4%20LEGO%20brick.SLDDRW"
+              data-nom="2x4 LEGO brick.SLDDRW">LEGO drawing</button>
     </p>
     <p id="local" data-t="local" hidden>Your file is not uploaded to any server:
       it is read and converted in your browser.</p>
@@ -640,7 +643,7 @@ const TEXTES = {
     titre: "openSW — pièces, assemblages et mises en plan SolidWorks",
     depot: "Déposez un fichier", "depot-ou": "ou cliquez",
     exemples: "Pas de fichier sous la main ? Ouvrez un exemple :",
-    "ex-piece": "Pièce NIST", "ex-asm": "Assemblage NIST", "ex-plan": "Mise en plan",
+    "ex-piece": "Pièce NIST", "ex-asm": "Assemblage NIST", "ex-plan": "Mise en plan LEGO",
     "ex-charge": (n) => `Téléchargement de l'exemple ${n}`,
     local: "Votre fichier n'est envoyé sur aucun serveur : il est lu et converti " +
       "dans votre navigateur.",
@@ -684,7 +687,7 @@ const TEXTES = {
     titre: "openSW — SolidWorks parts, assemblies and drawings",
     depot: "Drop a file", "depot-ou": "or click",
     exemples: "No file at hand? Open an example:",
-    "ex-piece": "NIST part", "ex-asm": "NIST assembly", "ex-plan": "Drawing",
+    "ex-piece": "NIST part", "ex-asm": "NIST assembly", "ex-plan": "LEGO drawing",
     "ex-charge": (n) => `Downloading the example ${n}`,
     local: "Your file is not uploaded to any server: it is read and converted " +
       "in your browser.",

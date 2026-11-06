@@ -31,8 +31,10 @@ module recomputes nothing, it reads them and places them.
 ``Contents/VBLists``
     The edges of each view, **in 3D, in the part's frame**, already
     tessellated: ``[body u32][kind u32][n u32][n × (x, y, z)]``, kind
-    ``0x321`` edge, ``0x331`` silhouette. A view projects them with its
-    matrix: ``sheet = position + scale·(p·R) + t``.
+    ``0x321`` edge, ``0x331`` silhouette (older versions write kind 0). A
+    view projects them with its matrix: ``sheet = position + scale·(p·R) + t``.
+    Edges precede the name of the view they belong to; a section view's
+    come under another name (``…-SectionAssembly-1``).
 
 ``Contents/Definition``
     Only the order of names (which view sits on which sheet) and the
@@ -49,7 +51,7 @@ import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from struct import unpack_from
+from struct import pack, unpack_from
 
 from .container import Container, open_container
 
@@ -70,8 +72,12 @@ ARC_GLYPHE = 0x65
 #: their glyph, which the file also carries.
 SYMBOLES = {"DIAM": "Ø", "PM": "±", "DEG": "°"}
 
-#: Edge kinds of ``VBLists``.
-ARETE, SILHOUETTE = 0x321, 0x331
+#: Edge kinds of ``VBLists``; older versions write 0 for an edge.
+ARETE, SILHOUETTE, ARETE_ANCIENNE = 0x321, 0x331, 0
+
+#: Offset, after a view's matrix, of the record that repeats its position.
+COMPAGNON = 410
+IDENTITE = pack("<9d", 1, 0, 0, 0, 1, 0, 0, 0, 1)
 
 #: Beyond this, a coordinate in metres is not a coordinate.
 BORNE_M = 100.0
@@ -145,7 +151,8 @@ class Vue:
     nom: str
     echelle: float
     position: tuple[float, float]
-    rotation: tuple[tuple[float, float, float], ...]
+    #: ``None`` for a projected view that keeps no rotation of its own.
+    rotation: tuple[tuple[float, float, float], ...] | None
     translation: tuple[float, float, float]
     aretes: list[Polyligne] = field(default_factory=list)
 
@@ -377,7 +384,24 @@ def _vues(d: bytes) -> list[tuple[int, Vue]]:
                 and all(math.isfinite(x) and abs(x) < 10 for x in t)):
             continue
         out.append((i, Vue("", s, pos, rows, t)))
-    return out
+    # A projected view may keep no rotation, but its scale and position are
+    # there, repeated by the record that follows: it is listed all the
+    # same, so that the views after it keep their names.
+    vus = {i for i, _ in out}
+    j = d.find(IDENTITE)
+    while j >= 0:
+        i = j - COMPAGNON
+        if i >= 0 and i not in vus and j + 96 <= len(d):
+            t = unpack_from("<3d", d, i + 72)
+            s = unpack_from("<d", d, i + 96)[0]
+            pos = unpack_from("<2d", d, i + 106)
+            repete = unpack_from("<3d", d, j + 72)[1:]
+            if (0 < s < 1e4 and all(0 < p < 10 for p in pos)
+                    and all(abs(a - b) < 1e-9 for a, b in zip(repete, pos, strict=True))
+                    and all(math.isfinite(x) and abs(x) < 10 for x in t)):
+                out.append((i, Vue("", s, pos, None, t)))
+        j = d.find(IDENTITE, j + 1)
+    return sorted(out, key=lambda x: x[0])
 
 
 def _hex(r: int, g: int, b: int) -> str | None:
@@ -473,32 +497,40 @@ def _primitives(d: bytes, debut: int, non_lus: dict,
 NOM_VUE = re.compile(r"@(Drawing View\d+)$")
 
 
-def _aretes(vb: bytes) -> list[tuple[str, list]]:
-    """``[(view name, [(offset, body, kind, 3D points)…])…]``.
+def _aretes(vb: bytes) -> list[tuple[str | None, list]]:
+    """``[(view name or None, [(offset, body, kind, 3D points)…])…]``.
 
-    A view's edges precede its name (``cube-1@Drawing View1``) in the
-    stream: they belong to the first view named after them.
+    Edges precede the name they belong to (``cube-1@Drawing View1``) in
+    the stream; a name that is not a view's (a section's) gives ``None``.
     """
     noms = []
     for m in re.finditer(re.escape(UTF16), vb):
         lu = _cstring(vb, m.start())
-        if lu and NOM_VUE.search(lu[0]):
-            noms.append((m.start(), NOM_VUE.search(lu[0]).group(1)))
-    paquets = [(nom, []) for _, nom in noms]
-    i, n = 0, len(vb) - 12
-    while i < n:
-        corps, genre, k = unpack_from("<III", vb, i)
-        if genre in (ARETE, SILHOUETTE) and corps < 4096 and 1 <= k < 500_000:
-            pts = _doubles(vb, i + 12, 3 * k)
-            if pts is not None:
-                j = next((x for x, (at, _) in enumerate(noms) if at > i), None)
-                if j is not None:
-                    paquets[j][1].append(
-                        (i, corps, genre,
-                         [pts[3 * a : 3 * a + 3] for a in range(k)]))
-                i += 12 + 24 * k
-                continue
-        i += 1
+        if lu and "@" in lu[0]:
+            vue = NOM_VUE.search(lu[0])
+            noms.append((m.start(), vue.group(1) if vue else None))
+    # Kind 0 only in a file that has no edge of the current kinds: in one
+    # that has, it also matches bytes that are not an edge.
+    for genres, depuis in (((ARETE, SILHOUETTE), 0), ((ARETE_ANCIENNE,), 1)):
+        paquets = [(nom, []) for _, nom in noms]
+        trouve = False
+        i, n = 0, len(vb) - 12
+        while i < n:
+            corps, genre, k = unpack_from("<III", vb, i)
+            if genre in genres and depuis <= corps < 4096 and 1 <= k < 500_000:
+                pts = _doubles(vb, i + 12, 3 * k)
+                if pts is not None:
+                    trouve = True
+                    j = next((x for x, (at, _) in enumerate(noms) if at > i), None)
+                    if j is not None:
+                        paquets[j][1].append(
+                            (i, corps, genre,
+                             [pts[3 * a : 3 * a + 3] for a in range(k)]))
+                    i += 12 + 24 * k
+                    continue
+            i += 1
+        if trouve:
+            break
     return paquets
 
 
@@ -560,10 +592,7 @@ def read_drawing(source: str | Path | Container) -> Drawing:
 
     vues = [v for at, v in _vues(dl) if at > fin_feuilles]
     ordre = _ordre_definition(definition, [f.nom for f in feuilles])
-    # A view's name comes back once per body it shows; edges are merged.
-    aretes: dict[str, list] = {}
-    for nom, paquet in _aretes(flux.get("Contents/VBLists", b"")):
-        aretes.setdefault(nom, []).extend(paquet)
+    places = []
     for k, vue in enumerate(vues):
         if k < len(ordre):
             feuille_nom, vue.nom = ordre[k]
@@ -571,11 +600,39 @@ def read_drawing(source: str | Path | Container) -> Drawing:
             feuille_nom, vue.nom = None, f"Drawing View{k + 1}"
             non_lus["view on no known sheet"] = non_lus.get(
                 "view on no known sheet", 0) + 1
-        for at, corps, genre, pts in aretes.get(vue.nom, []):
-            vue.aretes.append(Polyligne(
-                [vue.projeter(p) for p in pts], corps, genre == SILHOUETTE,
-                f"A{at}"))
-        cible = next((f for f in feuilles if f.nom == feuille_nom), feuilles[0])
+        places.append((vue, next((f for f in feuilles if f.nom == feuille_nom),
+                                 feuilles[0])))
+    # A view's name comes back once per body it shows; edges are merged. A
+    # group under another name (a section view's) belongs to the view that
+    # follows the previous group's.
+    ordre_vues = [v.nom for v, _ in places]
+    aretes: dict[str, list] = {}
+    precedente = None
+    for nom, paquet in _aretes(flux.get("Contents/VBLists", b"")):
+        if nom is None and precedente in ordre_vues:
+            k = ordre_vues.index(precedente) + 1
+            nom = ordre_vues[k] if k < len(ordre_vues) else None
+        if nom is None:
+            if paquet:
+                non_lus["edges of no known view"] = non_lus.get(
+                    "edges of no known view", 0) + len(paquet)
+            continue
+        aretes.setdefault(nom, []).extend(paquet)
+        precedente = nom
+    for vue, cible in places:
+        paquet = aretes.get(vue.nom, [])
+        if vue.rotation is None:
+            if paquet:
+                non_lus["projected view (no rotation stored)"] = non_lus.get(
+                    "projected view (no rotation stored)", 0) + 1
+            paquet = []
+        for at, corps, genre, pts in paquet:
+            q = [vue.projeter(p) for p in pts]
+            if not all(-1 <= x <= cible.largeur + 1 and -1 <= y <= cible.hauteur + 1
+                       for x, y in q):
+                non_lus["edge off the sheet"] = non_lus.get("edge off the sheet", 0) + 1
+                continue
+            vue.aretes.append(Polyligne(q, corps, genre == SILHOUETTE, f"A{at}"))
         cible.vues.append(vue)
     # Centre marks are not in the display list: they live only in
     # ``Definition`` (class ``moCenterMarkSym_c``), which is not decoded.
