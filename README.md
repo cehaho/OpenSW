@@ -27,10 +27,35 @@ python tools/convert.py --help
 python tools/webui.py                          # http://127.0.0.1:8765
 ```
 
-Upload a part, download the `.x_t` or STEP, and view it in 3D. Uploads are
-deleted after conversion, results after 30 minutes. `PORT` and `OPENSW_HOST`
-set the address; on a public server, put an authenticating reverse proxy in
-front.
+Upload a part, download the `.x_t` or STEP, and view it in 3D: click a face
+to read its name, `F<node>`. Uploads are deleted after conversion, results
+after 30 minutes. `PORT` and `OPENSW_HOST` set the address; on a public
+server, put an authenticating reverse proxy in front.
+
+## In the browser, without a server
+
+```sh
+python tools/pages.py                          # writes _site/
+```
+
+`_site/` is the same page, served by any static host (GitHub Pages): the
+converter runs in the browser under [Pyodide](https://pyodide.org), and the
+3D view uses [occt-import-js](https://github.com/kovacsv/occt-import-js)
+(OpenCASCADE in WebAssembly). The file never leaves the browser. The STEP is
+the same as the desktop one except for the last digits (WebAssembly's
+`sin`/`cos`) and LF line endings.
+
+## Assemblies
+
+The web app shows an assembly (`.SLDASM`) in 3D from the display mesh
+SolidWorks stores in it: components, placements, hidden and suppressed
+states. Not the exact geometry, which stays in the parts.
+
+```python
+from sldprt.assembly import read_assembly, to_view
+
+asm = read_assembly("assembly.SLDASM")
+```
 
 ## Drawings
 
