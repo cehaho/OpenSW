@@ -11,3 +11,7 @@ Files opened by the web page's example buttons.
 The example part, `nist_ftc_08_asme1_rc_sw1802.SLDPRT` (NIST PMI test case,
 public domain), is fetched from the
 [cadmpeg](https://github.com/cadmpeg/cadmpeg) corpus.
+
+The example drawing, `2x4 LEGO brick.SLDDRW`, is fetched from
+[andyeske/How-to-CAD-Almost-Anything](https://github.com/andyeske/How-to-CAD-Almost-Anything)
+(MIT IAP 2024 course, MIT licence, © 2024 andyeske).
