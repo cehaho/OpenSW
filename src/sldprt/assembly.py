@@ -14,7 +14,8 @@ their ``.SLDPRT``, but two streams are enough to show it, both written
 ``FaceTessellations/*``
     The display mesh of each **distinct part** (two instances of a part
     share it), face by face, as triangle strips. The ``Directory`` stream
-    says which component reads which mesh.
+    says which component reads which mesh. Older files have no such
+    streams and keep the same strips in ``Contents/DisplayLists``.
 """
 
 from __future__ import annotations
@@ -216,6 +217,8 @@ def _maillages(flux: dict[str, bytes]) -> tuple[dict[str, list], dict[str, int]]
     donnees = {k: v for k, v in flux.items()
                if k.startswith("FaceTessellations/") and k != "FaceTessellations/Directory"}
     if repertoire is None or not donnees:
+        if "Contents/DisplayLists" in flux:
+            return _maillages_anciens(flux["Contents/DisplayLists"])
         non_lus["no display mesh"] = 1
         return {}, non_lus
     # Entry keys, found again in the data: an eight-byte window with at most
@@ -249,6 +252,52 @@ def _maillages(flux: dict[str, bytes]) -> tuple[dict[str, list], dict[str, int]]
                 "component with no mesh read", 0) + 1
             continue
         out[nom] = faces
+    return out, non_lus
+
+
+def _maillages_anciens(d: bytes) -> tuple[dict[str, list], dict[str, int]]:
+    """``({component: faces}, unread)`` from ``Contents/DisplayLists``.
+
+    Files without ``FaceTessellations`` (older SolidWorks versions) keep the
+    display mesh there, in the same strip arrays. Each component starts with
+    a ``name-N@assembly`` string followed by its part file's path; the mesh
+    of a part follows its first instance only, in the part's frame, and the
+    other instances share it.
+    """
+    chaines = []
+    for m in re.finditer(re.escape(UTF16), d):
+        lu = _cstring(d, m.start())
+        if lu:
+            chaines.append((m.start(), lu[0]))
+    # A component header is followed, a few strings later, by a part path;
+    # annotation references (``name@assembly`` too) are not.
+    tetes = []
+    for x, (at, texte) in enumerate(chaines):
+        if "@" not in texte:
+            continue
+        chemin = next((s for _, s in chaines[x + 1 : x + 5]
+                       if s.lower().endswith(".sldprt")), None)
+        if chemin is not None:
+            tetes.append((at, texte.split("@")[0], PureWindowsPath(chemin).name.lower()))
+    non_lus: dict[str, int] = {}
+    if not tetes:
+        non_lus["no display mesh"] = 1
+        return {}, non_lus
+    par_fichier: dict[str, list] = {}
+    noms = []
+    for k, (at, nom, fichier) in enumerate(tetes):
+        fin = tetes[k + 1][0] if k + 1 < len(tetes) else len(d)
+        faces = _faces(d, at, fin)
+        if faces and fichier not in par_fichier:
+            par_fichier[fichier] = faces
+        noms.append((nom, fichier))
+    out = {}
+    for nom, fichier in noms:
+        if fichier in par_fichier:
+            out[nom] = par_fichier[fichier]
+        else:
+            non_lus["component with no mesh read"] = non_lus.get(
+                "component with no mesh read", 0) + 1
     return out, non_lus
 
 
