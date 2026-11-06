@@ -869,7 +869,7 @@ def adaptive_cubic(model, surface_node, curve, tolerance=CURVE_TOLERANCE,
     if last <= first:
         raise EvaluateError("a curve whose parameter span does not increase")
     breaks = [k for k in curve["distinct"] if first < k < last]
-    edges = [first] + breaks + [last]
+    edges = [first, *breaks, last]
 
     times = [first]
     poles = [_composed(model, surface_node, curve, first)]
