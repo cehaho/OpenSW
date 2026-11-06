@@ -640,7 +640,6 @@ HTML = r"""<!doctype html>
       <input id="plan-cherche" placeholder="E123, A456…" spellcheck="false">
       <button id="plan-trouver" data-t="trouver">Find</button>
       <button id="plan-recadrer" data-t="recadrer">Fit</button>
-      <button id="plan-svg" data-t="svg-feuille">SVG of this sheet</button>
     </div>
   </div>
 
@@ -687,7 +686,7 @@ const TEXTES = {
       "flèches : 15°, Maj : 90°.",
     "aide-plan": "Cliquez sur un trait pour lire son nom. Glisser : déplacer · molette : zoomer.",
     copier: "Copier le nom", trouver: "Trouver", recadrer: "Recadrer",
-    "svg-feuille": "SVG de cette feuille",
+    "svg-feuille": "Télécharger la feuille affichée en SVG",
     "journal-vide": "Le journal s'écrira ici.",
     journal: "Journal", "copier-journal": "Copier le journal", copié: "copié",
     "plein-écran": "Pleine page (Échap pour revenir)",
@@ -731,7 +730,7 @@ const TEXTES = {
       "middle double-click or F: zoom to fit · arrows: 15°, Shift: 90°.",
     "aide-plan": "Click a line to read its name. Drag: pan · wheel: zoom.",
     copier: "Copy name", trouver: "Find", recadrer: "Fit",
-    "svg-feuille": "SVG of this sheet",
+    "svg-feuille": "Download the shown sheet as SVG",
     "journal-vide": "The log will appear here.",
     journal: "Log", "copier-journal": "Copy the log", copié: "copied",
     "plein-écran": "Full page (Esc to go back)",
@@ -1526,6 +1525,7 @@ function planche(plan) {
     onglets.append(b);
   });
   feuille(Math.max(0, plan.feuilles.findIndex((f) => f.active)));
+  lienSvg();
 }
 
 function feuille(i) {
@@ -1638,8 +1638,21 @@ function trouverTrait() {
 }
 
 $("plan-recadrer").onclick = () => P.plein && cadrer({ ...P.plein });
-// The sheet as the server drew it, before zoom and pan touched its viewBox.
-$("plan-svg").onclick = () => {
+// The shown sheet as SVG, next to the other downloads: as the server
+// drew it, before zoom and pan touched its viewBox.
+function lienSvg() {
+  $("lien").querySelector("a.svg")?.remove();
+  const lien = document.createElement("a");
+  lien.className = "action telecharger svg";
+  lien.href = "#";
+  lien.title = t("svg-feuille");
+  lien.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>`;
+  lien.append("svg");
+  lien.onclick = (e) => { e.preventDefault(); enregistrerSvg(); };
+  $("lien").append(lien);
+}
+
+function enregistrerSvg() {
   const f = P.feuilles[P.rang];
   if (!f) return;
   const base = ($("fichier").files[0]?.name || "drawing").replace(/\.[^.]*$/, "");
