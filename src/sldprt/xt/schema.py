@@ -147,7 +147,8 @@ def find_schema(root: Path, key: str) -> Path | None:
 def resolve_schemas(
     root: Path, base_schema: str | None, schema_key: str
 ) -> tuple[Schema, Schema | None]:
-    from ..builtin import base_schema as builtin_base, envelope_for
+    from ..builtin import base_schema as builtin_base
+    from ..builtin import envelope_for
 
     base_path = find_schema(root, f"SCH_{base_schema}")
     if base_path is not None:
