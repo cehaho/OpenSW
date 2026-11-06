@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1582,6 +1583,17 @@ def _string_literal(text: str) -> str:
 
 
 def _iso_text(text: str) -> str:
+    # A STEP file is ASCII but for a few names: only the non-ASCII runs are
+    # transcribed, with the same splits as a character-by-character walk.
+    if text.isascii():
+        return text
+    return _NON_ASCII.sub(lambda m: _iso_run(m.group()), text)
+
+
+_NON_ASCII = re.compile(r"[^\x00-\x7f]+")
+
+
+def _iso_run(text: str) -> str:
     out: list[str] = []
     run: list[str] = []
     wide = False
