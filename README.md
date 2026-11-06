@@ -80,7 +80,9 @@ drawing = read_drawing("plan.SLDDRW")
 svg = to_svg(drawing.active)
 ```
 
-Not shown yet: centre marks, hatches, images, sketches drawn inside a view.
+Drawings from older SolidWorks versions are read too. Not shown yet:
+dimensions and sketches drawn inside a view, centre marks, images, and
+projected views that store no rotation of their own.
 
 ## Parasolid schemas
 
