@@ -58,12 +58,14 @@ the same as the desktop one except for the last digits (WebAssembly's
 
 The web app shows an assembly (`.SLDASM`) in 3D from the display mesh
 SolidWorks stores in it: components, placements, hidden and suppressed
-states. Not the exact geometry, which stays in the parts.
+states. Not the exact geometry, which stays in the parts. It downloads as
+STL (binary, millimetres, components placed).
 
 ```python
-from sldprt.assembly import read_assembly, to_view
+from sldprt.assembly import read_assembly, to_stl, to_view
 
 asm = read_assembly("assembly.SLDASM")
+open("assembly.stl", "wb").write(to_stl(asm))
 ```
 
 ## Drawings
@@ -71,13 +73,17 @@ asm = read_assembly("assembly.SLDASM")
 The web app also shows a SolidWorks drawing (`.SLDDRW`) as SVG, sheet by
 sheet: lines, arcs, texts (fonts, sizes, bold, colours, Ø ± ° symbols), table
 cells and model views. Click a stroke to read its name. Nothing is
-recomputed: the strokes are those SolidWorks wrote in the file.
+recomputed: the strokes are those SolidWorks wrote in the file. It downloads
+as DXF R12 in millimetres (a zip of one DXF per sheet when there are
+several), and each sheet as SVG. In the DXF, colours are rounded to the
+nearest plain AutoCAD colour and filled arrowheads become outlines.
 
 ```python
-from sldprt.drawing import read_drawing, to_svg
+from sldprt.drawing import read_drawing, to_dxf, to_svg
 
 drawing = read_drawing("plan.SLDDRW")
 svg = to_svg(drawing.active)
+open("plan.dxf", "w", encoding="cp1252").write(to_dxf(drawing.active))
 ```
 
 Drawings from older SolidWorks versions are read too. Not shown yet:

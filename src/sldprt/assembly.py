@@ -28,7 +28,7 @@ import xml.etree.ElementTree as ET
 from array import array
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
-from struct import unpack_from
+from struct import pack, unpack_from
 
 from .container import Container, open_container
 
@@ -366,3 +366,30 @@ def to_view(asm: Assembly) -> dict:
         "rayon": diagonale / 2,
         "sommets": base64.b64encode(sommets.tobytes()).decode("ascii"),
     }
+
+
+def to_stl(asm: Assembly) -> bytes:
+    """The visible components' display mesh as binary STL, placed, in mm.
+
+    SolidWorks' display mesh, not the exact geometry: the parts are not in
+    the assembly file.
+    """
+    triangles = []
+    for c in asm.composants:
+        if c.cache or c.supprime:
+            continue
+        for face in c.faces:
+            for tri in face:
+                triangles.append([tuple(1000 * v for v in c.placer(p)) for p in tri])
+    if not triangles:
+        raise AssemblyError("no visible component has a mesh")
+    out = bytearray(b"openSW: SolidWorks display mesh, mm".ljust(80, b" "))
+    out += pack("<I", len(triangles))
+    for a, b, c in triangles:
+        u = [b[j] - a[j] for j in range(3)]
+        v = [c[j] - a[j] for j in range(3)]
+        n = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
+             u[0] * v[1] - u[1] * v[0])
+        lg = math.sqrt(sum(x * x for x in n)) or 1.0
+        out += pack("<12fH", *(x / lg for x in n), *a, *b, *c, 0)
+    return bytes(out)
