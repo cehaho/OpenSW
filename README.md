@@ -86,9 +86,9 @@ svg = to_svg(drawing.active)
 open("plan.dxf", "w", encoding="cp1252").write(to_dxf(drawing.active))
 ```
 
-Drawings from older SolidWorks versions are read too. Not shown yet:
-dimensions and sketches drawn inside a view, centre marks, images, and
-projected views that store no rotation of their own.
+Drawings from older SolidWorks versions are read too, dimensions included.
+Not shown yet: centre marks, images, and the edges of projected views that
+store no rotation of their own.
 
 ## Parasolid schemas
 

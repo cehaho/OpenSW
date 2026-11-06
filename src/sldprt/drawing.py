@@ -41,8 +41,9 @@ module recomputes nothing, it reads them and places them.
     colours set by hand on sketch entities.
 
 What is **not** read, and :attr:`Drawing.non_lus` counts instead of hiding:
-items of unknown type, sketches drawn *inside* a view (their frame is not
-established), centre marks, hatches, images, OLE sheet formats.
+items of unknown type, centre marks, hatches, images, OLE sheet formats.
+Dimensions and sketches placed *inside* a view are read: they are written in
+sheet coordinates, before their view.
 """
 
 from __future__ import annotations
@@ -580,17 +581,18 @@ def read_drawing(source: str | Path | Container) -> Drawing:
 
     definition = flux.get("Contents/Definition", b"")
     explicites = frozenset(_couleurs_explicites(definition))
+    dans_vues = []
     for at, el in _primitives(dl, debut, non_lus, explicites):
         k = next((x for x, e in enumerate(entetes) if e[0] > at), None)
         if k is None:
-            # After the last sheet: a sketch drawn inside a view, whose frame
-            # is not established.
-            non_lus["primitive inside a view"] = non_lus.get(
-                "primitive inside a view", 0) + 1
+            # After the last sheet: a dimension or a sketch placed inside a
+            # view, already in sheet coordinates; which sheet is found below.
+            dans_vues.append((at, el))
             continue
         feuilles[k].elements.append(el)
 
-    vues = [v for at, v in _vues(dl) if at > fin_feuilles]
+    lues = [(at, v) for at, v in _vues(dl) if at > fin_feuilles]
+    vues = [v for _, v in lues]
     ordre = _ordre_definition(definition, [f.nom for f in feuilles])
     places = []
     for k, vue in enumerate(vues):
@@ -602,6 +604,15 @@ def read_drawing(source: str | Path | Container) -> Drawing:
                 "view on no known sheet", 0) + 1
         places.append((vue, next((f for f in feuilles if f.nom == feuille_nom),
                                  feuilles[0])))
+    # What is placed inside a view precedes the view's record, as its edges
+    # precede its name: a primitive goes to the sheet of the next view.
+    for at, el in dans_vues:
+        k = next((x for x, (av, _) in enumerate(lues) if av > at), None)
+        if k is None:
+            non_lus["primitive of no known view"] = non_lus.get(
+                "primitive of no known view", 0) + 1
+            continue
+        places[k][1].elements.append(el)
     # A view's name comes back once per body it shows; edges are merged. A
     # group under another name (a section view's) belongs to the view that
     # follows the previous group's.
