@@ -483,13 +483,13 @@ HTML = r"""<!doctype html>
 <title>openSW: SLDPRT to Parasolid and STEP, SLDDRW on screen</title>
 <style>
   /* The author's « VSS » v7 design system tokens, the ones openPDF3D uses:
-     warm neutrals, 3 px corners, a single accent (red here, the logo's,
+     grey neutrals (openPDF3D's warm ones looked brown), 3 px corners, a single accent (red here, the logo's,
      where openPDF3D is blue). Light by default, dark when the system asks.
      The older names (--fond, --carte…) remain, set on the new ones. */
   :root {
-    --bg: #f5f4f2; --surface: #ffffff; --raised: #ffffff; --soft: #efedea;
-    --border: #e3e1dd; --text: #292724; --muted: #6d6963; --action-text: #ffffff;
-    --control: #f1efec; --hover: #e9e7e3;
+    --bg: #f4f4f5; --surface: #ffffff; --raised: #ffffff; --soft: #eeeef0;
+    --border: #e2e2e6; --text: #26272b; --muted: #6a6b72; --action-text: #ffffff;
+    --control: #f0f0f2; --hover: #e8e8eb;
     --accent: #d2231a; --accent-soft: #fbe9e7; --focus-ring: rgba(210,35,26,.35);
     --green: #357f31; --green-soft: #e7f3e7;
     --red: #c53030; --red-soft: #fbe9e9;
@@ -502,9 +502,9 @@ HTML = r"""<!doctype html>
     --ok: var(--green); --err: var(--red); --step: var(--text); --note: var(--amber);
   }
   @media (prefers-color-scheme: dark) { :root {
-    --bg: #1a1918; --surface: #212020; --raised: #282726; --soft: #302f2d;
-    --border: #3d3b38; --text: #d8d5d0; --muted: #9a968f;
-    --control: #2e2d2b; --hover: rgba(255,251,245,.06);
+    --bg: #18191b; --surface: #202124; --raised: #27282b; --soft: #2e2f33;
+    --border: #3a3b40; --text: #d9dade; --muted: #9a9ba1;
+    --control: #2b2c30; --hover: rgba(255,255,255,.06);
     --accent: #f0645c; --accent-soft: rgba(240,100,92,.16); --focus-ring: rgba(240,100,92,.45);
     --green: #83cd7f; --green-soft: rgba(131,205,127,.14);
     --red: #ef8574; --red-soft: rgba(239,133,116,.14);
