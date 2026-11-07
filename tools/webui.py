@@ -132,6 +132,7 @@ class Job:
         self.plan: bytes | None = None
         self.fiche: bytes | None = None
         self.composants: list | None = None
+        self.contraintes: list | None = None
 
 
 JOBS: dict[str, Job] = {}
@@ -206,6 +207,7 @@ def lire_fiche(job: Job) -> None:
     f["apercu"] = base64.b64encode(png).decode() if png else None
     if job.composants is not None:
         f["composants"] = job.composants
+        f["contraintes"] = job.contraintes or []
     job.fiche = json.dumps(f).encode()
 
 
@@ -422,6 +424,8 @@ def voir_assemblage(job: Job, data: bytes) -> None:
         # into a bill of materials by file.
         job.composants = [{"nom": c.nom, "fichier": c.fichier, "cache": c.cache,
                            "supprime": c.supprime} for c in asm.composants]
+        job.contraintes = [{"nom": c.nom, "type": c.type, "libelle": c.libelle}
+                           for c in asm.contraintes]
         for motif, n in asm.non_lus.items():
             say(f"not shown: {motif}, {n}", "note")
         vue = to_view(asm)
@@ -909,6 +913,7 @@ const TEXTES = {
     "f-nomenclature": "Nomenclature", "f-composants": "Composants",
     "f-cache": "caché", "f-supprime": "supprimé, hors nomenclature",
     "f-inertie": "Inertie au centre de masse",
+    "f-contraintes": "Contraintes", "m-0": "coïncidente", "m-5": "distance",
     "f-csv": "Télécharger la liste des composants en CSV",
     plusieurs: "Plusieurs fichiers : déposez un assemblage (.SLDASM) avec ses pièces.",
     corps: "corps",
@@ -972,6 +977,7 @@ const TEXTES = {
     "f-nomenclature": "Bill of materials", "f-composants": "Components",
     "f-cache": "hidden", "f-supprime": "suppressed, left out of the bill",
     "f-inertie": "Inertia at the centre of mass",
+    "f-contraintes": "Mates", "m-0": "coincident", "m-5": "distance",
     "f-csv": "Download the component list as CSV",
     plusieurs: "Several files: drop an assembly (.SLDASM) together with its parts.",
     corps: "body",
@@ -1298,6 +1304,11 @@ function fiche(d) {
     section(t("f-composants"));
     for (const c of d.composants) {
       rang(c.nom, c.fichier, c.supprime ? t("f-supprime") : c.cache ? t("f-cache") : "");
+    }
+    // The mates, as the tree names them; the type when it was measured.
+    if ((d.contraintes || []).length) {
+      section(t("f-contraintes"));
+      for (const c of d.contraintes) rang(c.libelle || c.nom, t("m-" + c.type) || `type ${c.type}`);
     }
     // The CSV is the list as the file gives it, one component per line: a
     // button next to the other downloads.

@@ -18,7 +18,7 @@ It is a file reader for interoperability, not a CAD kernel or an API.
 | **Part** | the exact solid of the saved configuration (Parasolid B-rep → `.x_t`, STEP), colours, face names | the feature tree (sketches, features, equations, history): what you get is the final solid, not how it was built |
 | | properties: summary, custom and per-configuration properties, configuration names, material and density, preview image | geometry of configurations that were not saved with their geometry (the page says which ones were) |
 | | mass, volume, area, centre of mass and inertia at the centre of mass, **when SolidWorks stored them** (it does when a property links to them) | mass properties SolidWorks did not store |
-| **Assembly** | components and a bill of materials by part file (→ CSV), placements, hidden and suppressed states, the display mesh (→ STL); with its part files, an exact STEP assembly | mates; configurations; the exact geometry, which is in the parts |
+| **Assembly** | components and a bill of materials by part file (→ CSV), placements, hidden and suppressed states, mates (name, type, the components they link), the display mesh (→ STL); with its part files, an exact STEP assembly | mate values (a distance, an angle) and the faces they hold; configurations; the exact geometry, which is in the parts |
 | **Drawing** | sheets, lines, arcs, texts (fonts, colours), tables, model view edges, dimensions as drawn (→ SVG, DXF) | dimension values as data (tolerances, types, the edges they measure); title blocks as fields; hatches, images, centre marks, the sheet format |
 
 What is not read is counted in the log rather than hidden.
@@ -76,7 +76,8 @@ The web app shows an assembly (`.SLDASM`) in 3D from the display mesh
 SolidWorks stores in it: components, placements, hidden and suppressed
 states. Not the exact geometry, which stays in the parts. It downloads as
 STL (binary, millimetres, components placed). The file properties list its
-components with a count per part file, and the list downloads as CSV.
+components with a count per part file, and its mates; the component list
+downloads as CSV.
 
 ```python
 from sldprt.assembly import read_assembly, to_stl, to_view

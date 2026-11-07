@@ -67,8 +67,23 @@ class Composant:
 
 
 @dataclass
+class Mate:
+    """An assembly mate, as the file names it."""
+
+    nom: str
+    #: ``swMateType_e``: 0 coincident, 5 distance (the two measured).
+    type: int
+    #: The mate class, ``moMateCoincident``, ``moMateDistanceDim_c``…
+    classe: str
+    #: The tree text: ``Coincident1 (cube<1>,cube<2>)``.
+    libelle: str
+    configuration: str
+
+
+@dataclass
 class Assembly:
     composants: list[Composant]
+    contraintes: list[Mate] = field(default_factory=list)
     #: What was seen but not read, by reason.
     non_lus: dict[str, int] = field(default_factory=dict)
 
@@ -301,6 +316,52 @@ def _maillages_anciens(d: bytes) -> tuple[dict[str, list], dict[str, int]]:
     return out, non_lus
 
 
+# --- mates -------------------------------------------------------------------
+
+#: An MFC UTF-16 ``CString``: ``FF FE FF``, its length in characters on one
+#: byte, then the text.
+_CSTRING = re.compile(rb"\xff\xfe\xff(.)", re.S)
+
+
+def _strings(data: bytes) -> list[tuple[int, int, str]]:
+    """``(start, end, text)`` of each UTF-16 ``CString`` in the stream."""
+    out = []
+    for m in _CSTRING.finditer(data):
+        n = m.group(1)[0]
+        end = m.end() + 2 * n
+        if end <= len(data):
+            out.append((m.start(), end, data[m.end():end].decode("utf-16-le", "replace")))
+    return out
+
+
+def _mates(data: bytes | None) -> list[Mate]:
+    """The ``moBCMate_c`` objects of ``SwDocContentMgr/SwDocContentMgrInfo``.
+
+    Each writes, in a row: the configuration, four bytes, the name, two
+    four-byte integers (the second is the type, ``swMateType_e``), the class
+    (``moMate…``) and the tree text. They are found by their class, and only
+    those whose sequence fits are kept.
+    """
+    if not data or b"moBCMate_c" not in data:
+        return []
+    base = data.index(b"moBCMate_c")
+    strings = _strings(data[base:])
+    out = []
+    for k in range(2, len(strings) - 1):
+        start, _, cls = strings[k]
+        if not cls.startswith("moMate"):
+            continue
+        _, end_name, name = strings[k - 1]
+        _, end_conf, conf = strings[k - 2]
+        if end_name + 8 != start or end_conf + 4 != strings[k - 1][0]:
+            continue
+        a = base + end_name
+        kind = int.from_bytes(data[a + 4:a + 8], "little")
+        label = strings[k + 1][2] if strings[k + 1][0] == strings[k][1] else ""
+        out.append(Mate(name, kind, cls, label, conf))
+    return out
+
+
 # --- assembly ----------------------------------------------------------------
 
 
@@ -320,7 +381,8 @@ def read_assembly(source: str | Path | Container) -> Assembly:
         if not c.faces and not c.supprime:
             non_lus["component with no mesh"] = non_lus.get(
                 "component with no mesh", 0) + 1
-    return Assembly(composants, non_lus)
+    mates = _mates(flux.get("SwDocContentMgr/SwDocContentMgrInfo"))
+    return Assembly(composants, mates, non_lus)
 
 
 def boite(asm: Assembly) -> tuple[tuple[float, ...], tuple[float, ...]] | None:
