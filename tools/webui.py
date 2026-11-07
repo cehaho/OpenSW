@@ -914,6 +914,7 @@ const TEXTES = {
     "f-cache": "caché", "f-supprime": "supprimé, hors nomenclature",
     "f-inertie": "Inertie au centre de masse",
     "f-liens": "Textes liés",
+    "f-cotes": "Cotes",
     "f-contraintes": "Contraintes", "m-0": "coïncidente", "m-5": "distance",
     "f-csv": "Télécharger la liste des composants en CSV",
     plusieurs: "Plusieurs fichiers : déposez un assemblage (.SLDASM) avec ses pièces.",
@@ -979,6 +980,7 @@ const TEXTES = {
     "f-cache": "hidden", "f-supprime": "suppressed, left out of the bill",
     "f-inertie": "Inertia at the centre of mass",
     "f-liens": "Linked texts",
+    "f-cotes": "Dimensions",
     "f-contraintes": "Mates", "m-0": "coincident", "m-5": "distance",
     "f-csv": "Download the component list as CSV",
     plusieurs: "Several files: drop an assembly (.SLDASM) together with its parts.",
@@ -1274,6 +1276,16 @@ function fiche(d) {
   if ((d.liens || []).length) {
     section(t("f-liens"));
     d.liens.forEach((l) => rang(l.valeur, "", l.expression));
+  }
+  // Dimensions as numbers, in mm: the value and the tolerance as stored.
+  if ((d.cotes || []).length) {
+    section(t("f-cotes"));
+    const mm = (v) => Number((v * 1000).toPrecision(10)).toLocaleString();
+    for (const c of d.cotes) {
+      const tol = c.tolerance;
+      rang(c.nom, `${mm(c.valeur_m)} mm`,
+           tol ? `+${mm(tol.haut_m)} / ${mm(tol.bas_m)} mm` : "");
+    }
   }
   const nombre = (x, n) => Number(x).toLocaleString(undefined, { maximumSignificantDigits: n });
   for (const c of d.configurations || []) {

@@ -33,6 +33,7 @@ property more, checked against what the SolidWorks API reads back):
 from __future__ import annotations
 
 import re
+import struct
 from itertools import pairwise
 from xml.etree import ElementTree
 
@@ -189,6 +190,45 @@ def linked_texts(container: Container) -> list[dict]:
     return out
 
 
+def dimensions(container: Container) -> dict:
+    """The length dimensions of a drawing as numbers: the name, the value
+    in metres and, when there is one, the tolerance: its type
+    (``swTolType_e``) and its upper and lower deviations, in metres.
+    Only a dimension written with its class name is read (the first of
+    each class in the stream); the others are counted in ``non_lues``."""
+    blob = container.get("Contents/Definition")
+    out = {"cotes": [], "non_lues": 0}
+    if blob is None:
+        return out
+    data = blob.data
+    cls = b"moLengthParameter_c"
+    i = data.find(cls)
+    if i < 0:
+        return out
+    # After the class, two bytes, then the name (UTF-16 CString); the value
+    # is 22 bytes after the name. The tolerance, when there is one, follows
+    # the value one byte later: moDimTolerance_c, the type on four bytes,
+    # four zero bytes, the upper deviation, the lower deviation.
+    name_start = i + len(cls) + 2
+    if data[name_start:name_start + 3] != bytes.fromhex("fffeff"):
+        out["non_lues"] = 1
+        return out
+    n = data[name_start + 3]
+    name_end = name_start + 4 + 2 * n
+    name = data[name_start + 4:name_end].decode("utf-16-le", "replace")
+    value = struct.unpack_from("<d", data, name_end + 22)[0]
+    tolerance = None
+    tol = bytes.fromhex("ffff01001000") + b"moDimTolerance_c"
+    if data[name_end + 31:name_end + 31 + len(tol)] == tol:
+        t = name_end + 31 + len(tol)
+        kind = int.from_bytes(data[t:t + 4], "little")
+        upper, lower = struct.unpack_from("<2d", data, t + 8)
+        tolerance = {"type": kind, "haut_m": upper, "bas_m": lower}
+    out["cotes"].append({"nom": name, "valeur_m": value, "tolerance": tolerance})
+    out["non_lues"] = max(0, data.count(b"moDimBackupDef_c") - 1)
+    return out
+
+
 def read_properties(container: Container) -> dict:
     """Everything the document says about itself, read, never computed."""
     info = _information(container)
@@ -219,6 +259,7 @@ def read_properties(container: Container) -> dict:
         **_dates(container),
         "proprietes": properties(_xml(container, "docProps/custom.xml")),
         "configurations": configs,
+        "cotes": dimensions(container)["cotes"],
         "liens": linked_texts(container),
         "apercu_png": png if png.startswith(PNG_SIGNATURE) else None,
     }
