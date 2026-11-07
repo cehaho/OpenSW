@@ -190,42 +190,66 @@ def linked_texts(container: Container) -> list[dict]:
     return out
 
 
+#: The body shared by the parameters of ``Contents/Definition``, between the
+#: name and the value.
+_PARAMETER_BODY = bytes.fromhex("0000000000000040ffffffff00000000fffeff000000")
+_LENGTH_CLASS = b"moLengthParameter_c"
+_TOLERANCE_CLASS = bytes.fromhex("ffff01001000") + b"moDimTolerance_c"
+
+
+def _parameter(data: bytes, name_start: int) -> tuple[str, float, int] | None:
+    """``(name, value, end)`` of a parameter body whose name starts at
+    ``name_start``, or ``None`` if what follows is not a dimension's."""
+    if data[name_start:name_start + 3] != bytes.fromhex("fffeff"):
+        return None
+    name_end = name_start + 4 + 2 * data[name_start + 3]
+    body = name_end + len(_PARAMETER_BODY)
+    if data[name_end:body] != _PARAMETER_BODY or body + 8 > len(data):
+        return None
+    name = data[name_start + 4:name_end].decode("utf-16-le", "replace")
+    return name, struct.unpack_from("<d", data, body)[0], body + 8
+
+
 def dimensions(container: Container) -> dict:
-    """The length dimensions of a drawing as numbers: the name, the value
-    in metres and, when there is one, the tolerance: its type
-    (``swTolType_e``) and its upper and lower deviations, in metres.
-    Only a dimension written with its class name is read (the first of
-    each class in the stream); the others are counted in ``non_lues``."""
+    """The length dimensions of a drawing as numbers: name, value in metres
+    and, when there is one, the tolerance: its type (``swTolType_e``), its
+    upper and lower deviations, in metres.
+
+    MFC writes the class name at the first dimension only; the next ones
+    carry a two-byte class reference, followed by the same two bytes as the
+    first after its class name. A tolerance is read only when written with
+    its class name; those with a reference only are counted in
+    ``non_lues``."""
     blob = container.get("Contents/Definition")
     out = {"cotes": [], "non_lues": 0}
     if blob is None:
         return out
     data = blob.data
-    cls = b"moLengthParameter_c"
-    i = data.find(cls)
+    i = data.find(_LENGTH_CLASS)
     if i < 0:
         return out
-    # After the class, two bytes, then the name (UTF-16 CString); the value
-    # is 22 bytes after the name. The tolerance, when there is one, follows
-    # the value one byte later: moDimTolerance_c, the type on four bytes,
-    # four zero bytes, the upper deviation, the lower deviation.
-    name_start = i + len(cls) + 2
-    if data[name_start:name_start + 3] != bytes.fromhex("fffeff"):
-        out["non_lues"] = 1
-        return out
-    n = data[name_start + 3]
-    name_end = name_start + 4 + 2 * n
-    name = data[name_start + 4:name_end].decode("utf-16-le", "replace")
-    value = struct.unpack_from("<d", data, name_end + 22)[0]
-    tolerance = None
-    tol = bytes.fromhex("ffff01001000") + b"moDimTolerance_c"
-    if data[name_end + 31:name_end + 31 + len(tol)] == tol:
-        t = name_end + 31 + len(tol)
-        kind = int.from_bytes(data[t:t + 4], "little")
-        upper, lower = struct.unpack_from("<2d", data, t + 8)
-        tolerance = {"type": kind, "haut_m": upper, "bas_m": lower}
-    out["cotes"].append({"nom": name, "valeur_m": value, "tolerance": tolerance})
-    out["non_lues"] = max(0, data.count(b"moDimBackupDef_c") - 1)
+    mark = data[i + len(_LENGTH_CLASS):i + len(_LENGTH_CLASS) + 2]
+    starts = [i + len(_LENGTH_CLASS) + 2]
+    j = starts[0]
+    while (j := data.find(mark + bytes.fromhex("fffeff"), j + 1)) >= 0:
+        if j >= 2 and data[j - 1] & 0x80:  # a class reference, "xx 8y"
+            starts.append(j + 2)
+    for start in starts:
+        read = _parameter(data, start)
+        if read is None:
+            continue
+        name, value, end = read
+        tolerance = None
+        if data[end + 1:end + 1 + len(_TOLERANCE_CLASS)] == _TOLERANCE_CLASS:
+            t = end + 1 + len(_TOLERANCE_CLASS)
+            kind = int.from_bytes(data[t:t + 4], "little")
+            upper, lower = struct.unpack_from("<2d", data, t + 8)
+            tolerance = {"type": kind, "haut_m": upper, "bas_m": lower}
+        elif data[end + 2] & 0x80 and data[end + 3:end + 11].count(0) >= 7:
+            # A reference followed by a type and zeros: likely a tolerance
+            # already named earlier, which is not followed.
+            out["non_lues"] += 1
+        out["cotes"].append({"nom": name, "valeur_m": value, "tolerance": tolerance})
     return out
 
 
