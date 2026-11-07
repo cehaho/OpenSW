@@ -669,7 +669,8 @@ HTML = r"""<!doctype html>
     <!-- A chosen file opens by itself (STEP, drawing or assembly); only the
          .x_t export, which has no view, keeps a button. -->
     <div id="actions"><button id="btn-parasolid" class="action" hidden disabled
-        data-t-title="exporter-xt" title="Also export to Parasolid"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/></svg>.x_t</button><span id="lien"></span></div>
+        data-t-title="exporter-xt" title="Also export to Parasolid"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/></svg>.x_t</button><button id="btn-step-asm" class="action" hidden
+        data-t-title="step-asm" title="Export to STEP: pick the assembly's parts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/></svg>.STEP</button><input id="pieces-asm" type="file" multiple accept=".SLDPRT,.sldprt" hidden><span id="lien"></span></div>
   </div>
 
   <div class="carte" id="vue-carte">
@@ -781,6 +782,7 @@ const TEXTES = {
       "Cliquez sur un trait pour lire son nom.",
     "aucun-trait": "Aucun trait sous la souris.",
     "pas-plan": (n) => `${n} : pas dans cette mise en plan.`,
+    "step-asm": "Exporter en STEP : choisir les pièces de l'assemblage",
     plusieurs: "Plusieurs fichiers : déposez un assemblage (.SLDASM) avec ses pièces.",
     corps: "corps",
     genres: { line: "segment", circle: "cercle", path: "arc", polygon: "polygone",
@@ -827,6 +829,7 @@ const TEXTES = {
       "Click a line to read its name.",
     "aucun-trait": "No line under the mouse.",
     "pas-plan": (n) => `${n}: not in this drawing.`,
+    "step-asm": "Export to STEP: pick the assembly's parts",
     plusieurs: "Several files: drop an assembly (.SLDASM) together with its parts.",
     corps: "body",
     genres: { line: "segment", circle: "circle", path: "arc", polygon: "polygon",
@@ -897,6 +900,8 @@ function actifs(oui) {
   const asm = prêt && /\.sldasm$/i.test(f.name);
   $("btn-parasolid").hidden = !f || plan || asm;
   $("btn-parasolid").disabled = !prêt || plan || asm;
+  $("btn-step-asm").hidden = !asm;
+  $("btn-step-asm").disabled = !prêt;
 }
 
 // A chosen file opens at once: a part goes through STEP (the view reads the
@@ -1793,6 +1798,20 @@ $("plan-trouver").onclick = trouverTrait;
 $("plan-cherche").addEventListener("keydown", (e) => { if (e.key === "Enter") trouverTrait(); });
 
 $("btn-parasolid").onclick = () => exporter("parasolid");
+// Un assemblage montré seul : ses pièces, choisies ensuite, et le tout part
+// en un zip qui revient en STEP exact.
+$("btn-step-asm").onclick = () => $("pieces-asm").click();
+$("pieces-asm").addEventListener("change", async () => {
+  const asm = $("fichier").files[0];
+  const pieces = [...$("pieces-asm").files];
+  $("pieces-asm").value = "";
+  if (!asm || !pieces.length) return;
+  const dt = new DataTransfer();
+  dt.items.add(await zipper([asm, ...pieces], asm.name.replace(/\.[^.]*$/, "") + ".zip"));
+  $("fichier").files = dt.files;
+  $("depot-nom").textContent = asm.name;
+  exporter("assemblage");
+});
 
 // Copy the log without toggling it open or closed.
 $("journal-copier").onclick = (e) => {
