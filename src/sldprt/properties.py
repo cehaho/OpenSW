@@ -33,6 +33,7 @@ property more, checked against what the SolidWorks API reads back):
 from __future__ import annotations
 
 import re
+from itertools import pairwise
 from xml.etree import ElementTree
 
 from .container import Container
@@ -164,6 +165,30 @@ def _mass(values: str) -> dict:
     return out
 
 
+#: A UTF-16 MFC ``CString`` (``FF FE FF``, a one-byte length).
+_CSTRING = re.compile(rb"\xff\xfe\xff(.)", re.S)
+
+
+def linked_texts(container: Container) -> list[dict]:
+    """The linked texts of a drawing (a title block, a note): each
+    ``$PRP…`` expression and the value it shows, as SolidWorks wrote
+    them side by side in ``Contents/Definition``."""
+    blob = container.get("Contents/Definition")
+    if blob is None:
+        return []
+    data = blob.data
+    strings = []
+    for m in _CSTRING.finditer(data):
+        end = m.end() + 2 * m.group(1)[0]
+        strings.append((m.start(), end, data[m.end():end].decode("utf-16-le", "replace")))
+    out, seen = [], set()
+    for (_, end, text), (start, _, value) in pairwise(strings):
+        if text.startswith("$PRP") and start == end and value and (text, value) not in seen:
+            seen.add((text, value))
+            out.append({"expression": text, "valeur": value})
+    return out
+
+
 def read_properties(container: Container) -> dict:
     """Everything the document says about itself, read, never computed."""
     info = _information(container)
@@ -194,5 +219,6 @@ def read_properties(container: Container) -> dict:
         **_dates(container),
         "proprietes": properties(_xml(container, "docProps/custom.xml")),
         "configurations": configs,
+        "liens": linked_texts(container),
         "apercu_png": png if png.startswith(PNG_SIGNATURE) else None,
     }

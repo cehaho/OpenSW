@@ -19,7 +19,7 @@ It is a file reader for interoperability, not a CAD kernel or an API.
 | | properties: summary, custom and per-configuration properties, configuration names, material and density, preview image | geometry of configurations that were not saved with their geometry (the page says which ones were) |
 | | mass, volume, area, centre of mass and inertia at the centre of mass, **when SolidWorks stored them** (it does when a property links to them) | mass properties SolidWorks did not store |
 | **Assembly** | components and a bill of materials by part file (→ CSV), placements, hidden and suppressed states, mates (name, type, the components they link), the display mesh (→ STL); with its part files, an exact STEP assembly | mate values (a distance, an angle) and the faces they hold; configurations; the exact geometry, which is in the parts |
-| **Drawing** | sheets, lines, arcs, texts (fonts, colours), tables, model view edges, dimensions as drawn (→ SVG, DXF) | dimension values as data (tolerances, types, the edges they measure); title blocks as fields; hatches, images, centre marks, the sheet format |
+| **Drawing** | sheets, lines, arcs, texts (fonts, colours), tables, model view edges, dimensions and their tolerances as drawn (→ SVG, DXF); linked texts (`$PRP:"…"`) with the value they show | dimension values as numbers (tolerances, types, the edges they measure); a sheet format as a whole; hatches, images, centre marks, the sheet format |
 
 What is not read is counted in the log rather than hidden.
 

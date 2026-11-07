@@ -913,6 +913,7 @@ const TEXTES = {
     "f-nomenclature": "Nomenclature", "f-composants": "Composants",
     "f-cache": "caché", "f-supprime": "supprimé, hors nomenclature",
     "f-inertie": "Inertie au centre de masse",
+    "f-liens": "Textes liés",
     "f-contraintes": "Contraintes", "m-0": "coïncidente", "m-5": "distance",
     "f-csv": "Télécharger la liste des composants en CSV",
     plusieurs: "Plusieurs fichiers : déposez un assemblage (.SLDASM) avec ses pièces.",
@@ -977,6 +978,7 @@ const TEXTES = {
     "f-nomenclature": "Bill of materials", "f-composants": "Components",
     "f-cache": "hidden", "f-supprime": "suppressed, left out of the bill",
     "f-inertie": "Inertia at the centre of mass",
+    "f-liens": "Linked texts",
     "f-contraintes": "Mates", "m-0": "coincident", "m-5": "distance",
     "f-csv": "Download the component list as CSV",
     plusieurs: "Several files: drop an assembly (.SLDASM) together with its parts.",
@@ -1267,6 +1269,11 @@ function fiche(d) {
   if ((d.proprietes || []).length) {
     section(t("f-perso"));
     d.proprietes.forEach((p) => rang(p.nom, p.valeur, p.expression || ""));
+  }
+  // Linked texts (a title block, a note): the value shown, and its expression.
+  if ((d.liens || []).length) {
+    section(t("f-liens"));
+    d.liens.forEach((l) => rang(l.valeur, "", l.expression));
   }
   const nombre = (x, n) => Number(x).toLocaleString(undefined, { maximumSignificantDigits: n });
   for (const c of d.configurations || []) {
