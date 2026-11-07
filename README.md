@@ -7,6 +7,22 @@ without SolidWorks. View parts, assemblies (`.SLDASM`) and drawings
 **Try it online: <https://cehaho.github.io/OpenSW/>** — your file is not
 uploaded to any server: it is read and converted in your browser.
 
+## What it reads, and what it doesn't
+
+openSW shows what the file holds, as SolidWorks stored it. It recomputes
+nothing: no regeneration, no retessellation, no mass computed from geometry.
+It is a file reader for interoperability, not a CAD kernel or an API.
+
+| | read | not read |
+|---|---|---|
+| **Part** | the exact solid of the saved configuration (Parasolid B-rep → `.x_t`, STEP), colours, face names | the feature tree (sketches, features, equations, history): what you get is the final solid, not how it was built |
+| | properties: summary, custom and per-configuration properties, configuration names, material and density, preview image | geometry of configurations that were not saved with their geometry (the page says which ones were) |
+| | mass, volume, area, centre of mass and inertia at the centre of mass, **when SolidWorks stored them** (it does when a property links to them) | mass properties SolidWorks did not store |
+| **Assembly** | components and a bill of materials by part file (→ CSV), placements, hidden and suppressed states, the display mesh (→ STL); with its part files, an exact STEP assembly | mates; configurations; the exact geometry, which is in the parts |
+| **Drawing** | sheets, lines, arcs, texts (fonts, colours), tables, model view edges, dimensions as drawn (→ SVG, DXF) | dimension values as data (tolerances, types, the edges they measure); title blocks as fields; hatches, images, centre marks, the sheet format |
+
+What is not read is counted in the log rather than hidden.
+
 ## Install
 
 ```sh
@@ -59,7 +75,8 @@ the same as the desktop one except for the last digits (WebAssembly's
 The web app shows an assembly (`.SLDASM`) in 3D from the display mesh
 SolidWorks stores in it: components, placements, hidden and suppressed
 states. Not the exact geometry, which stays in the parts. It downloads as
-STL (binary, millimetres, components placed).
+STL (binary, millimetres, components placed). The file properties list its
+components with a count per part file, and the list downloads as CSV.
 
 ```python
 from sldprt.assembly import read_assembly, to_stl, to_view
@@ -113,7 +130,7 @@ about itself, read as stored, nothing computed: summary (title, author,
 keywords…), created and saved dates and by whom, custom properties (with the
 expression of a linked one), and for a part each configuration with its own
 properties, its material and density, and whether its geometry was saved.
-Mass, volume and centre of mass appear only when SolidWorks wrote them, which
+Mass, volume, centre of mass and inertia appear only when SolidWorks wrote them, which
 it does when a custom property links to them. Each value was checked against
 what the SolidWorks API reads back, on parts made for that purpose.
 

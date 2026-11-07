@@ -51,8 +51,12 @@ _EXPRESSION = 1 << 24
 #: ``FPVals``; the ``vt:filetime`` one is a UTC date.
 _DATE = "64"
 #: The quantities of ``SW-MassProp-Config-<n>`` whose rank is known
-#: (measured on a 10 mm cube); the others stay unnamed.
-MASSE = {"centre_m": slice(0, 3), "volume_m3": 3, "aire_m2": 4, "masse_kg": 5}
+#: (measured on a 10 mm cube; the inertia on the cube and an offset block);
+#: the last two stay unnamed. The inertia is about the centre of mass, in
+#: model axes: Lxx Lyy Lzz Lxy Lxz Lyz, in kg·m², the products with the
+#: sign of the SolidWorks API (``GetMomentOfInertia(0)``).
+MASSE = {"centre_m": slice(0, 3), "volume_m3": 3, "aire_m2": 4, "masse_kg": 5,
+         "inertie_kg_m2": slice(6, 12)}
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
@@ -156,7 +160,7 @@ def _materials(container: Container) -> dict[str, dict]:
 def _mass(values: str) -> dict:
     numbers = [float(x) for x in values.split(",")]
     out = {key: numbers[r] for key, r in MASSE.items()}
-    out["autres"] = numbers[6:]
+    out["autres"] = numbers[12:]
     return out
 
 

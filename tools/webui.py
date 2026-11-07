@@ -131,6 +131,7 @@ class Job:
         self.vue: bytes | None = None
         self.plan: bytes | None = None
         self.fiche: bytes | None = None
+        self.composants: list | None = None
 
 
 JOBS: dict[str, Job] = {}
@@ -203,6 +204,8 @@ def lire_fiche(job: Job) -> None:
         return
     png = f.pop("apercu_png")
     f["apercu"] = base64.b64encode(png).decode() if png else None
+    if job.composants is not None:
+        f["composants"] = job.composants
     job.fiche = json.dumps(f).encode()
 
 
@@ -415,6 +418,10 @@ def voir_assemblage(job: Job, data: bytes) -> None:
             triangles = sum(len(f) for f in c.faces)
             say(f"{c.nom}{etat}: {c.fichier}, {len(c.faces)} faces, "
                 f"{triangles} triangles", "detail")
+        # The component list, as the tree gives it: the page groups it
+        # into a bill of materials by file.
+        job.composants = [{"nom": c.nom, "fichier": c.fichier, "cache": c.cache,
+                           "supprime": c.supprime} for c in asm.composants]
         for motif, n in asm.non_lus.items():
             say(f"not shown: {motif}, {n}", "note")
         vue = to_view(asm)
@@ -899,6 +906,10 @@ const TEXTES = {
     "f-masse": "Masse", "f-volume": "Volume", "f-aire": "Aire",
     "f-centre": "Centre de gravité",
     "f-masse-note": "écrites par SolidWorks parce qu'une propriété y est liée",
+    "f-nomenclature": "Nomenclature", "f-composants": "Composants",
+    "f-cache": "caché", "f-supprime": "supprimé, hors nomenclature",
+    "f-inertie": "Inertie au centre de masse",
+    "f-csv": "Télécharger la liste des composants en CSV",
     plusieurs: "Plusieurs fichiers : déposez un assemblage (.SLDASM) avec ses pièces.",
     corps: "corps",
     genres: { line: "segment", circle: "cercle", path: "arc", polygon: "polygone",
@@ -958,6 +969,10 @@ const TEXTES = {
     "f-masse": "Mass", "f-volume": "Volume", "f-aire": "Area",
     "f-centre": "Centre of mass",
     "f-masse-note": "written by SolidWorks because a property links to them",
+    "f-nomenclature": "Bill of materials", "f-composants": "Components",
+    "f-cache": "hidden", "f-supprime": "suppressed, left out of the bill",
+    "f-inertie": "Inertia at the centre of mass",
+    "f-csv": "Download the component list as CSV",
     plusieurs: "Several files: drop an assembly (.SLDASM) together with its parts.",
     corps: "body",
     genres: { line: "segment", circle: "circle", path: "arc", polygon: "polygon",
@@ -1262,8 +1277,46 @@ function fiche(d) {
       rang(t("f-volume"), `${nombre(m.volume_m3 * 1e9, 8)} mm³`);
       rang(t("f-aire"), `${nombre(m.aire_m2 * 1e6, 8)} mm²`);
       rang(t("f-centre"), m.centre_m.map((v) => nombre(v * 1000, 8)).join(" ; ") + " mm");
+      // At the centre of mass, model axes, in g·mm² as SolidWorks shows it.
+      if (m.inertie_kg_m2) {
+        const g = m.inertie_kg_m2.map((v) => nombre(v * 1e9, 8));
+        rang(t("f-inertie"), `Lxx ${g[0]} ; Lyy ${g[1]} ; Lzz ${g[2]}`, "g·mm²");
+        rang("", `Lxy ${g[3]} ; Lxz ${g[4]} ; Lyz ${g[5]}`, "g·mm²");
+      }
     }
     (c.proprietes || []).forEach((p) => rang(p.nom, p.valeur, p.expression || ""));
+  }
+  // An assembly: its bill of materials (one row per part file, suppressed
+  // components left out), then each component; a CSV of the former.
+  if ((d.composants || []).length) {
+    const par = new Map();
+    for (const c of d.composants) {
+      if (!c.supprime) par.set(c.fichier, (par.get(c.fichier) || 0) + 1);
+    }
+    section(t("f-nomenclature"));
+    for (const [fichier, n] of par) rang(fichier, `× ${n}`);
+    section(t("f-composants"));
+    for (const c of d.composants) {
+      rang(c.nom, c.fichier, c.supprime ? t("f-supprime") : c.cache ? t("f-cache") : "");
+    }
+    // The CSV is the list as the file gives it, one component per line: a
+    // button next to the other downloads.
+    const champ = (x) => `"${String(x).replace(/"/g, '""')}"`;
+    const ligne = (xs) => xs.map(champ).join(";");
+    const csv = [ligne(["component", "file", "state"])]
+      .concat(d.composants.map((c) => ligne([c.nom, c.fichier,
+        c.supprime ? "suppressed" : c.cache ? "hidden" : ""])))
+      .join("\r\n") + "\r\n";
+    $("lien").querySelector("a.csv")?.remove();
+    const a = document.createElement("a");
+    a.className = "action telecharger csv";
+    a.href = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv" }));
+    a.download = ($("depot-nom").textContent || "assembly").replace(/\.[^.]*$/, "") +
+      "-components.csv";
+    a.title = t("f-csv");
+    a.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>`;
+    a.append("csv");
+    $("lien").append(a);
   }
   const img = $("fiche-apercu");
   img.hidden = !d.apercu;
