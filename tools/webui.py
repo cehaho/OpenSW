@@ -482,128 +482,188 @@ HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <title>openSW: SLDPRT to Parasolid and STEP, SLDDRW on screen</title>
 <style>
+  /* The author's « VSS » v7 design system tokens, the ones openPDF3D uses:
+     warm neutrals, 3 px corners, a single accent (red here, the logo's,
+     where openPDF3D is blue). Light by default, dark when the system asks.
+     The older names (--fond, --carte…) remain, set on the new ones. */
   :root {
-    --fond: #15171c; --carte: #1d2027; --trait: #2c313b;
-    --texte: #e6e8ec; --doux: #9aa1ad;
-    --ok: #64c27b; --err: #e2686a; --step: #7aa7e8; --note: #d9a441;
+    --bg: #f5f4f2; --surface: #ffffff; --raised: #ffffff; --soft: #efedea;
+    --border: #e3e1dd; --text: #292724; --muted: #6d6963; --action-text: #ffffff;
+    --control: #f1efec; --hover: #e9e7e3;
+    --accent: #d2231a; --accent-soft: #fbe9e7; --focus-ring: rgba(210,35,26,.35);
+    --green: #357f31; --green-soft: #e7f3e7;
+    --red: #c53030; --red-soft: #fbe9e9;
+    --amber: #a87908; --amber-soft: #faf3df;
+    --radius: 3px; --radius-sm: 2px; --radius-full: 999px;
+    --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px;
+    --choix: #c96a0c;
+    --fond: var(--bg); --carte: var(--surface); --trait: var(--border);
+    --texte: var(--text); --doux: var(--muted);
+    --ok: var(--green); --err: var(--red); --step: var(--text); --note: var(--amber);
   }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg: #1a1918; --surface: #212020; --raised: #282726; --soft: #302f2d;
+    --border: #3d3b38; --text: #d8d5d0; --muted: #9a968f;
+    --control: #2e2d2b; --hover: rgba(255,251,245,.06);
+    --accent: #f0645c; --accent-soft: rgba(240,100,92,.16); --focus-ring: rgba(240,100,92,.45);
+    --green: #83cd7f; --green-soft: rgba(131,205,127,.14);
+    --red: #ef8574; --red-soft: rgba(239,133,116,.14);
+    --amber: #d3af2a; --amber-soft: rgba(211,175,42,.13);
+    --choix: #f0a35e;
+  } }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body {
-    margin: 0; padding: 24px 16px; background: var(--fond); color: var(--texte);
-    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+    margin: 0; padding: var(--s8) var(--s4) 64px; background: var(--bg); color: var(--text);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
+  :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
   main { max-width: 860px; margin: 0 auto; }
-  h1 { font-size: 22px; margin: 0 0 18px; font-weight: 700; letter-spacing: -0.3px;
-       display: flex; align-items: center; gap: 10px; }
-  h1 b { color: #e1251b; }
+  h1 { font-size: 20px; margin: 0 0 var(--s5); font-weight: 700;
+       display: flex; align-items: center; gap: var(--s3); }
+  h1 > span:first-of-type { font-weight: 400; color: var(--muted); }
+  h1 b { color: var(--text); font-weight: 700; }
   #logo { width: 40px; height: 40px; flex: 0 0 auto; }
-  .langues { margin-left: auto; display: flex; gap: 4px; }
-  .langues button { flex: 0 0 auto; padding: 5px 9px; font-size: 12px; }
-  .langues button.choisi { border-color: #e1251b; color: #fff; }
+  .langues { margin-left: auto; display: flex; gap: var(--s1); }
+  .langues button { flex: 0 0 auto; height: 26px; padding: 0 10px; font-size: 12px; }
+  .langues button.choisi, .onglets button.choisi {
+    background: var(--accent-soft); color: var(--accent); box-shadow: none;
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  }
   .carte {
-    background: var(--carte); border: 1px solid var(--trait);
-    border-radius: 10px; padding: 16px; margin-bottom: 16px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: var(--s4); margin-bottom: var(--s4);
   }
-  /* Drop zone: a click opens the file picker, a dropped file is treated as
-     chosen. The <input> itself is hidden inside. */
+  /* The drop zone: a click opens the picker, a file dropped on it goes as
+     if it had been chosen. The input itself is hidden inside. */
   #depot {
-    display: flex; flex-direction: column; align-items: center; gap: 8px;
-    padding: 26px 16px; border: 2px dashed var(--trait); border-radius: 10px;
-    color: var(--doux); text-align: center; cursor: pointer;
-    transition: border-color .15s, background .15s;
+    display: flex; flex-direction: column; align-items: center; gap: var(--s1);
+    padding: var(--s5) var(--s6); text-align: center; cursor: pointer; color: var(--muted);
+    border: 1.5px dashed color-mix(in srgb, var(--muted) 50%, transparent);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--control) 60%, transparent);
+    transition: border-color .12s, background .12s, color .12s;
   }
-  #depot:hover, #depot.survol { border-color: #e1251b; background: #e1251b14; }
-  #depot svg { width: 34px; height: 34px; fill: none; stroke: currentColor;
-               stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-  #depot b { color: var(--texte); }
-  #depot-nom { font-size: 13px; }
+  #depot:hover, #depot.survol { border-color: var(--accent); color: var(--text);
+                                background: var(--accent-soft); }
+  #depot svg { width: 22px; height: 22px; fill: none; stroke: currentColor;
+               stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  #depot b { color: var(--accent); font-weight: 600; }
+  #depot-nom { font-size: 11px; }
   #fichier { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-  #actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  /* Buttons: the VSS « secondary » recipe by default. */
+  button {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    flex: 1 1 200px; height: 32px; padding: 0 14px; border-radius: var(--radius);
+    font: inherit; font-weight: 500; color: var(--text); cursor: pointer; white-space: nowrap;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--raised) 92%, #fff),
+                                        color-mix(in srgb, var(--raised) 96%, #000));
+    border: 1px solid color-mix(in srgb, var(--muted) 45%, transparent);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 1px 1px rgba(0,0,0,.12);
+    transition: background .12s, border-color .12s, color .12s, filter .12s;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.04); }
+  button:active:not(:disabled) { filter: none; box-shadow: inset 0 1px 3px rgba(0,0,0,.22); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  /* Export and download side by side, an icon and a word. */
+  #actions { display: flex; gap: var(--s2); margin-top: var(--s3); flex-wrap: wrap; }
   #lien { display: contents; }
   .action {
-    display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto;
-    padding: 9px 14px; border-radius: 8px; font: 600 14px/1 inherit;
-    text-decoration: none; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    flex: 0 0 auto; height: 32px; padding: 0 14px; border-radius: var(--radius);
+    font: inherit; font-weight: 600; text-decoration: none; cursor: pointer;
   }
-  .action svg { width: 18px; height: 18px; fill: none; stroke: currentColor;
+  .action svg { width: 14px; height: 14px; fill: none; stroke: currentColor;
                 stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  button {
-    flex: 1 1 200px; padding: 11px 16px; border-radius: 8px; cursor: pointer;
-    border: 1px solid var(--trait); background: #262b34; color: var(--texte);
-    font: 600 14px/1 inherit;
+  /* Download: the « primary » recipe. */
+  a.telecharger {
+    color: var(--action-text); border: 1px solid color-mix(in srgb, var(--accent) 70%, #000);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 90%, #fff) 0%,
+                var(--accent) 55%, color-mix(in srgb, var(--accent) 92%, #000) 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.28); text-shadow: 0 -1px 0 rgba(0,0,0,.22);
   }
-  button:hover:not(:disabled) { background: #2f3540; }
-  button:disabled { opacity: .45; cursor: default; }
-  [hidden] { display: none !important; }
-  /* Progress bar: measured during upload, indeterminate while the server
-     works (it cannot tell how much is left). */
-  #local { margin: 10px 0 0; color: var(--doux); font-size: 13px; }
-  #exemples { margin: 10px 0 0; color: var(--doux); font-size: 13px;
-              display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
-  #exemples button { flex: 0 0 auto; padding: 6px 10px; font-size: 13px; }
-  #charge { margin-top: 14px; }
-  .charge-piste { height: 6px; border-radius: 3px; background: #262b33; overflow: hidden; }
-  #charge-barre { height: 100%; width: 0; background: #e1251b; border-radius: 3px;
-                  transition: width .15s; }
-  #charge.attente #charge-barre { width: 30%; transition: none;
-                                  animation: va-et-vient 1.3s ease-in-out infinite; }
-  @keyframes va-et-vient { from { margin-left: -30%; } to { margin-left: 100%; } }
-  #charge-texte { margin-top: 6px; color: var(--doux); font-size: 12px;
+  a.telecharger:hover { filter: brightness(1.06); }
+  #local { margin: var(--s3) 0 0; color: var(--muted); font-size: 12px; }
+  #exemples { margin: var(--s3) 0 0; color: var(--muted); font-size: 12px;
+              display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--s2); }
+  #exemples button { flex: 0 0 auto; height: 26px; padding: 0 10px; font-size: 12px; }
+  /* The progress bar: measured during upload, back and forth while the
+     server works, since it cannot tell how much is left. */
+  #charge { margin-top: var(--s3); }
+  .charge-piste { height: 5px; border-radius: var(--radius-full); background: var(--soft);
+                  overflow: hidden; box-shadow: inset 0 1px 2px rgba(0,0,0,.16); }
+  #charge-barre { height: 100%; width: 0; border-radius: inherit; transition: width .15s;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 88%, #fff), var(--accent)); }
+  #charge.attente #charge-barre { width: 40%; transition: none;
+                                  animation: va-et-vient 1.2s ease-in-out infinite; }
+  @keyframes va-et-vient { from { margin-left: -42%; } to { margin-left: 102%; } }
+  #charge-texte { margin-top: 6px; color: var(--muted); font-size: 11px;
                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #log {
-    font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
-    height: 340px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
-    margin-top: 10px;
-  }
-  /* The log is collapsed; it opens on click, or by itself on an error. */
+  /* The file properties. */
   #fiche-carte { display: none; }
-  .fiche-titre { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
-                 margin-bottom: 10px; }
-  .fiche-titre small, #fiche-table small { color: var(--doux); }
-  .fiche { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
-  #fiche-apercu { max-width: 160px; width: 100%; border-radius: 6px; background: #fff; }
-  #fiche-table { border-collapse: collapse; font-size: 13px; flex: 1 1 240px; }
-  #fiche-table th { text-align: left; color: var(--doux); font-weight: normal;
-                    padding: 3px 12px 3px 0; vertical-align: top; white-space: nowrap; }
+  .fiche-titre { display: flex; flex-wrap: wrap; gap: var(--s1) 10px; align-items: baseline;
+                 margin-bottom: var(--s3); font-size: 12px; }
+  .fiche-titre small, #fiche-table small { color: var(--muted); font-size: 11px; }
+  .fiche { display: flex; gap: var(--s4); flex-wrap: wrap; align-items: flex-start; }
+  #fiche-apercu { max-width: 160px; width: 100%; border-radius: var(--radius);
+                  border: 1px solid var(--border); background: #fff; }
+  #fiche-table { border-collapse: collapse; flex: 1 1 240px; }
+  #fiche-table th { text-align: left; color: var(--muted); font-weight: 400;
+                    padding: 3px var(--s3) 3px 0; vertical-align: top; white-space: nowrap; }
   #fiche-table td { overflow-wrap: anywhere; padding: 3px 0; }
-  #fiche-table .fiche-section th { color: var(--texte); font-weight: 600; padding-top: 10px; }
+  #fiche-table .fiche-section th { color: var(--text); font-weight: 600; padding-top: var(--s3);
+                                   border-bottom: 1px solid var(--border); }
+  /* The log, folded: it opens on a click, or by itself on an error. */
+  #journal { padding: 0; overflow: hidden; }
   #journal summary {
-    display: flex; align-items: center; gap: 10px; cursor: pointer;
-    list-style: none; color: var(--doux); font-size: 14px; font-weight: 600;
+    display: flex; align-items: center; gap: var(--s2); cursor: pointer; user-select: none;
+    list-style: none; color: var(--muted); font-size: 12px; font-weight: 600;
+    padding: 9px var(--s3);
   }
+  #journal summary:hover { background: var(--hover); }
   #journal summary::-webkit-details-marker { display: none; }
-  #journal summary::before { content: "▸"; transition: transform .15s; }
-  #journal[open] summary::before { transform: rotate(90deg); }
-  #journal-dernier { flex: 1; min-width: 0; font-weight: 400; font-size: 12px;
+  #journal summary::before { content: ""; flex: none; width: 7px; height: 7px; margin: 0 2px;
+    border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted);
+    transform: rotate(-45deg); transition: transform .12s; }
+  #journal[open] summary::before { transform: rotate(45deg); }
+  #journal-dernier { flex: 1; min-width: 0; font-weight: 400; font-size: 11px;
                      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .icone { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-           padding: 6px 8px; }
-  .icone svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2;
+  #log {
+    font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    height: 340px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+    padding: var(--s3) var(--s4); border-top: 1px solid var(--border); color: var(--muted);
+    background: color-mix(in srgb, var(--control) 70%, transparent);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.10);
+  }
+  .icone { flex: 0 0 auto; width: 26px; height: 26px; padding: 0; }
+  .icone svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2;
                stroke-linecap: round; stroke-linejoin: round; }
-  /* Full page: the card covers the browser window (not the screen). */
+  /* Full page: the card covers the browser window (not the screen), and
+     the view takes whatever the bars leave. */
   .carte.pleine-page { position: fixed; inset: 0; z-index: 50; margin: 0;
                        display: flex !important; flex-direction: column;
-                       border-radius: 0; padding: 12px; }
+                       border-radius: 0; padding: var(--s3); }
   .carte.pleine-page .vue-cadre { flex: 1 1 auto; min-height: 0; }
   .carte.pleine-page #vue, .carte.pleine-page #plan { height: 100%; }
   body.pleine-page { overflow: hidden; }
-  .plein { position: absolute; top: 8px; right: 8px; z-index: 2;
-           background: #262b34cc; }
+  .plein { position: absolute; top: 8px; right: 8px; z-index: 2; }
   #log div { display: flex; gap: 10px; }
-  #log .ms { color: #5d646f; flex: 0 0 62px; text-align: right; }
-  .ok   { color: var(--ok); }
-  .err  { color: var(--err); }
-  .step { color: var(--step); }
-  .note { color: var(--note); }
-  .vide { color: var(--doux); }
-  .pied { margin: 18px 0 8px; color: var(--doux); font-size: 12px; line-height: 1.6;
+  #log .ms { color: color-mix(in srgb, var(--muted) 70%, transparent); flex: 0 0 62px;
+             text-align: right; font-variant-numeric: tabular-nums; }
+  .ok   { color: var(--green); }
+  .err  { color: var(--red); }
+  .step { color: var(--text); font-weight: 600; }
+  .note { color: var(--amber); }
+  .vide { color: var(--muted); }
+  .pied { margin: var(--s8) 0 var(--s2); color: var(--muted); font-size: 11px; line-height: 1.6;
           text-align: center; }
-  .pied a { color: var(--texte); }
+  .pied a { color: inherit; }
   #vue-carte { display: none; }
-  /* SolidWorks background: Top/Bottom Gradient Color. */
+  /* SolidWorks' gradient background: Top/Bottom Gradient Color. */
   .vue-cadre { position: relative; }
   #vue {
-    display: block; width: 100%; height: 560px; border-radius: 8px;
+    display: block; width: 100%; height: 560px; border-radius: var(--radius);
     background: linear-gradient(#8795aa, #c3c8d2); cursor: default;
     touch-action: none; outline: none;
   }
@@ -611,44 +671,49 @@ HTML = r"""<!doctype html>
     position: absolute; left: 8px; bottom: 8px; width: 76px; height: 76px;
     pointer-events: none;
   }
-  .vue-vues { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
-  .vue-vues button { padding: 6px 10px; font-size: 13px; }
+  .vue-vues { display: flex; gap: 6px; flex-wrap: wrap; margin-top: var(--s3); }
+  .vue-vues button { flex: 0 0 auto; height: 26px; padding: 0 10px; font-size: 12px; }
   .vue-barre {
-    display: flex; gap: 10px; align-items: center; margin-top: 10px;
-    flex-wrap: wrap; font-size: 14px;
+    display: flex; gap: var(--s2); align-items: center; margin-top: var(--s3);
+    flex-wrap: wrap;
   }
-  #vue-info { flex: 1 1 260px; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
-  #vue-info b { color: #f0a35e; font-size: 15px; }
-  .vue-barre button { flex: 0 0 auto; padding: 8px 12px; font-weight: 500; }
+  #vue-info, #plan-info { flex: 1 1 260px;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  #vue-info b, #plan-info b { color: var(--choix); font-size: 13px; }
+  .vue-barre button { flex: 0 0 auto; }
   .vue-barre input {
-    width: 130px; padding: 7px 10px; border-radius: 7px; font: inherit;
-    background: #262b34; color: var(--texte); border: 1px solid var(--trait);
+    width: 130px; height: 32px; padding: 0 10px; border-radius: var(--radius); font: inherit;
+    background: var(--surface); color: var(--text); border: 1px solid var(--border);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.08);
   }
+  .vue-barre input:focus { border-color: var(--accent); outline: none;
+                           box-shadow: 0 0 0 2px var(--focus-ring); }
   #plan-carte { display: none; }
-  .onglets { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
-  .onglets button { flex: 0 0 auto; padding: 7px 12px; font-weight: 500; }
-  .onglets button.choisi { background: #34405a; border-color: #4d5f86; }
+  .onglets { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: var(--s3); }
+  .onglets button { flex: 0 0 auto; height: 26px; padding: 0 10px; font-size: 12px; }
   #plan {
-    /* Light but distinct from the paper, so that items placed off the sheet
-       stay readable and the sheet border shows. */
-    width: 100%; height: 560px; border-radius: 8px; background: #b9bcc2;
+    /* Light, and distinct from the paper: what lies off the sheet stays
+       readable, and the sheet's edge shows. */
+    width: 100%; height: 560px; border-radius: var(--radius); background: #b9bcc2;
     overflow: hidden; cursor: grab; touch-action: none;
   }
   #plan:active { cursor: grabbing; }
   #plan svg { width: 100%; height: 100%; display: block; }
   #plan .papier { fill: #fbfbf8; }
-  /* Colour and font read from the file are SVG attributes: CSS only sets
+  /* The colour and font read from the file are attributes: CSS only gives
      the default, without overriding them. */
   #plan .trait { stroke: #1b1e24; }
   #plan .trait * { stroke-width: 1.2px; vector-effect: non-scaling-stroke; }
   #plan .plein:not([fill]) { fill: #1b1e24; }
   #plan text:not([fill]) { fill: #1b1e24; }
   #plan text:not([font-family]) { font-family: "Century Gothic", ui-sans-serif, sans-serif; }
-  #plan .trait .choisi { stroke: #f0a35e; stroke-width: 3px; }
-  #plan .plein.choisi { fill: #f0a35e; }
-  #plan text.choisi { fill: #f0a35e; }
-  a.telecharger { background: #1f3a29; border: 1px solid #2f6b43; color: #a8e6bb; }
-  a.telecharger:hover { background: #26482f; }
+  #plan .trait .choisi { stroke: #e07b16; stroke-width: 3px; }
+  #plan .plein.choisi { fill: #e07b16; }
+  #plan text.choisi { fill: #e07b16; }
+  @media (max-width: 560px) {
+    body { padding: var(--s5) var(--s4) 48px; }
+    #vue, #plan { height: 380px; }
+  }
 </style>
 <main>
   <!-- Logo: the open box. Also used as the favicon (see below), so the page
