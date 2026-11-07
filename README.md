@@ -106,6 +106,28 @@ Drawings from older SolidWorks versions are read too, dimensions included.
 Not shown yet: centre marks, images, and the edges of projected views that
 store no rotation of their own.
 
+## File properties
+
+For any part, assembly or drawing, the web app shows what the file says
+about itself, read as stored, nothing computed: summary (title, author,
+keywords…), created and saved dates and by whom, custom properties (with the
+expression of a linked one), and for a part each configuration with its own
+properties, its material and density, and whether its geometry was saved.
+Mass, volume and centre of mass appear only when SolidWorks wrote them, which
+it does when a custom property links to them. Each value was checked against
+what the SolidWorks API reads back, on parts made for that purpose.
+
+```python
+from sldprt import open_container
+from sldprt.properties import read_properties
+
+info = read_properties(open_container("part.SLDPRT"))
+print(info["resume"], [c["nom"] for c in info["configurations"]])
+```
+
+These properties can say more than you think (the folder the file was saved
+from, who saved it): worth a look before sharing a part.
+
 ## Parasolid schemas
 
 Not included: they are Siemens files. Built-in facts cover SolidWorks parts.

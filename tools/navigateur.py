@@ -174,7 +174,7 @@ def _lancer(route, nom, data, dire) -> dict:
     (cible or webui.run)(job, data)
 
     sortie = {"fichier": "", "resultat": None, "vue": None, "plan": None,
-              "etiquete": None, "faces": None}
+              "etiquete": None, "faces": None, "fiche": None}
     if job.result is not None and job.result.exists():
         sortie["fichier"] = job.result.name
         sortie["resultat"] = job.result.read_bytes()
@@ -182,6 +182,8 @@ def _lancer(route, nom, data, dire) -> dict:
         sortie["vue"] = job.vue.decode()
     if job.plan is not None:
         sortie["plan"] = job.plan.decode()
+    if job.fiche is not None:
+        sortie["fiche"] = job.fiche.decode()
     if job.etiquete is not None:
         sortie["etiquete"], faces = job.etiquete
         sortie["faces"] = json.dumps(faces)

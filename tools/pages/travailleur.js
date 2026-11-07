@@ -146,6 +146,7 @@ onmessage = async (e) => {
       postMessage({ id, fichier: r.fichier, resultat }, [resultat.buffer]);
     }
     if (r.plan) postMessage({ id, plan: r.plan });
+    if (r.fiche) postMessage({ id, fiche: r.fiche });
     if (r.vue) postMessage({ id, vue: r.vue });
     if (r.etiquete) {
       try {
