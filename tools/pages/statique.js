@@ -18,6 +18,7 @@
     if (m.fichier) { j.fichier = m.fichier; j.resultat = m.resultat; }
     if (m.vue) j.vue = m.vue;
     if (m.plan) j.plan = m.plan;
+    if (m.fiche) j.fiche = m.fiche;
     if (m.fini) j.fini = true;
   };
   travailleur.onerror = (e) => {
@@ -34,7 +35,7 @@
     const q = new URL(url, location.href).searchParams;
     const id = "j" + (++suivant);
     travaux.set(id, { lignes: [], fini: false, fichier: "", resultat: null,
-                      vue: null, plan: null, début: performance.now() });
+                      vue: null, plan: null, fiche: null, début: performance.now() });
     const data = new Uint8Array(await corps.arrayBuffer());
     travailleur.postMessage({ id, route: q.get("route"), nom: q.get("nom"), data },
                             [data.buffer]);
@@ -51,10 +52,12 @@
     if (u.pathname.endsWith("/journal")) {
       const depuis = Number(u.searchParams.get("depuis") || 0);
       return json({ lignes: j.lignes.slice(depuis), fini: j.fini, fichier: j.fichier,
-                    vue: j.vue !== null, plan: j.plan !== null });
+                    vue: j.vue !== null, plan: j.plan !== null,
+                    fiche: j.fiche !== null });
     }
     if (u.pathname.endsWith("/vue") && j.vue) return new Response(j.vue);
     if (u.pathname.endsWith("/plan") && j.plan) return new Response(j.plan);
+    if (u.pathname.endsWith("/fiche") && j.fiche) return new Response(j.fiche);
     return new Response("not found", { status: 404 });
   };
 

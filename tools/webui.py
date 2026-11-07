@@ -130,6 +130,7 @@ class Job:
         self.fini_a: float | None = None
         self.vue: bytes | None = None
         self.plan: bytes | None = None
+        self.fiche: bytes | None = None
 
 
 JOBS: dict[str, Job] = {}
@@ -185,7 +186,28 @@ def run(job: Job, data: bytes) -> None:
                 "after this conversion", "detail")
 
 
+def lire_fiche(job: Job) -> None:
+    """Read the uploaded file's own record (properties, configurations,
+    material, preview) while it is still there. A file that is not a
+    SolidWorks document (an ``.x_t``) has none, and that is not an error."""
+    if job.source is None or not job.source.exists():
+        return
+    try:
+        import base64
+
+        from sldprt import open_container
+        from sldprt.properties import read_properties as fiche
+
+        f = fiche(open_container(job.source))
+    except Exception:
+        return
+    png = f.pop("apercu_png")
+    f["apercu"] = base64.b64encode(png).decode() if png else None
+    job.fiche = json.dumps(f).encode()
+
+
 def effacer_source(job: Job) -> None:
+    lire_fiche(job)
     if job.dossier is None:
         return
     if job.result is None:
@@ -534,6 +556,17 @@ HTML = r"""<!doctype html>
     margin-top: 10px;
   }
   /* The log is collapsed; it opens on click, or by itself on an error. */
+  #fiche-carte { display: none; }
+  .fiche-titre { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
+                 margin-bottom: 10px; }
+  .fiche-titre small, #fiche-table small { color: var(--doux); }
+  .fiche { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  #fiche-apercu { max-width: 160px; width: 100%; border-radius: 6px; background: #fff; }
+  #fiche-table { border-collapse: collapse; font-size: 13px; flex: 1 1 240px; }
+  #fiche-table th { text-align: left; color: var(--doux); font-weight: normal;
+                    padding: 3px 12px 3px 0; vertical-align: top; white-space: nowrap; }
+  #fiche-table td { overflow-wrap: anywhere; padding: 3px 0; }
+  #fiche-table .fiche-section th { color: var(--texte); font-weight: 600; padding-top: 10px; }
   #journal summary {
     display: flex; align-items: center; gap: 10px; cursor: pointer;
     list-style: none; color: var(--doux); font-size: 14px; font-weight: 600;
@@ -717,6 +750,12 @@ HTML = r"""<!doctype html>
     </div>
   </div>
 
+  <div class="carte" id="fiche-carte">
+    <div class="fiche-titre"><b data-t="fiche">File properties</b>
+      <small data-t="fiche-note">What the file says about itself, read as is: nothing is computed.</small></div>
+    <div class="fiche"><img id="fiche-apercu" alt="" hidden><table id="fiche-table"></table></div>
+  </div>
+
   <details class="carte" id="journal">
     <summary><span data-t="journal">Log</span><span id="journal-dernier"></span>
       <button class="icone" id="journal-copier" data-t-title="copier-journal"
@@ -783,6 +822,18 @@ const TEXTES = {
     "aucun-trait": "Aucun trait sous la souris.",
     "pas-plan": (n) => `${n} : pas dans cette mise en plan.`,
     "step-asm": "Exporter en STEP : choisir les pièces de l'assemblage",
+    fiche: "Propriétés du fichier",
+    "fiche-note": "Ce que le fichier dit de lui-même, lu tel quel : rien n'est calculé.",
+    "r-titre": "Titre", "r-sujet": "Sujet", "r-auteur": "Auteur",
+    "r-mots_cles": "Mots clés", "r-commentaires": "Commentaires",
+    "f-cree": "Créé", "f-enregistre": "Enregistré", "f-par": "Enregistré par",
+    "f-perso": "Propriétés personnalisées", "f-config": (n) => `Configuration « ${n} »`,
+    "f-geo": (oui) => oui ? "géométrie enregistrée dans le fichier"
+                          : "géométrie non enregistrée dans le fichier",
+    "f-materiau": "Matériau", "f-densite": "densité",
+    "f-masse": "Masse", "f-volume": "Volume", "f-aire": "Aire",
+    "f-centre": "Centre de gravité",
+    "f-masse-note": "écrites par SolidWorks parce qu'une propriété y est liée",
     plusieurs: "Plusieurs fichiers : déposez un assemblage (.SLDASM) avec ses pièces.",
     corps: "corps",
     genres: { line: "segment", circle: "cercle", path: "arc", polygon: "polygone",
@@ -830,6 +881,18 @@ const TEXTES = {
     "aucun-trait": "No line under the mouse.",
     "pas-plan": (n) => `${n}: not in this drawing.`,
     "step-asm": "Export to STEP: pick the assembly's parts",
+    fiche: "File properties",
+    "fiche-note": "What the file says about itself, read as is: nothing is computed.",
+    "r-titre": "Title", "r-sujet": "Subject", "r-auteur": "Author",
+    "r-mots_cles": "Keywords", "r-commentaires": "Comments",
+    "f-cree": "Created", "f-enregistre": "Saved", "f-par": "Saved by",
+    "f-perso": "Custom properties", "f-config": (n) => `Configuration "${n}"`,
+    "f-geo": (oui) => oui ? "geometry stored in the file"
+                          : "geometry not stored in the file",
+    "f-materiau": "Material", "f-densite": "density",
+    "f-masse": "Mass", "f-volume": "Volume", "f-aire": "Area",
+    "f-centre": "Centre of mass",
+    "f-masse-note": "written by SolidWorks because a property links to them",
     plusieurs: "Several files: drop an assembly (.SLDASM) together with its parts.",
     corps: "body",
     genres: { line: "segment", circle: "circle", path: "arc", polygon: "polygon",
@@ -1032,6 +1095,7 @@ async function exporter(route) {
     $("lien").innerHTML = "";
     $("vue-carte").style.display = "none";
     $("plan-carte").style.display = "none";
+    $("fiche-carte").style.display = "none";
   }
   log.innerHTML = ""; vide = true;
   const début = performance.now();
@@ -1067,6 +1131,7 @@ async function exporter(route) {
           charge(t("aff-plan", s));
           planche(await (await fetch(`/plan?job=${job}`)).json());
         }
+        if (état.fiche && !enPlus) fiche(await (await fetch(`/fiche?job=${job}`)).json());
         break;
       }
       charge(`${dernière} — ${s} s`);
@@ -1077,6 +1142,68 @@ async function exporter(route) {
   }
   $("charge").hidden = true;
   actifs(true);
+}
+
+// ---------------------------------------------------------------- properties
+// What the file says about itself. The values come from the file: they are
+// set as text, never as HTML.
+function fiche(d) {
+  const table = $("fiche-table");
+  table.replaceChildren();
+  const rang = (titre, valeur, note) => {
+    const tr = document.createElement("tr");
+    const th = document.createElement("th");
+    th.textContent = titre;
+    const td = document.createElement("td");
+    td.textContent = valeur;
+    if (note) {
+      const s = document.createElement("small");
+      s.textContent = " " + note;
+      td.append(s);
+    }
+    tr.append(th, td);
+    table.append(tr);
+  };
+  const section = (titre) => {
+    const tr = document.createElement("tr");
+    tr.className = "fiche-section";
+    const th = document.createElement("th");
+    th.colSpan = 2;
+    th.textContent = titre;
+    tr.append(th);
+    table.append(tr);
+  };
+  const date = (iso) => { const x = new Date(iso); return isNaN(x) ? iso : x.toLocaleString(); };
+  for (const [cle, v] of Object.entries(d.resume || {})) if (v) rang(t("r-" + cle), v);
+  if (d.cree) rang(t("f-cree"), date(d.cree));
+  if (d.enregistre) rang(t("f-enregistre"), date(d.enregistre));
+  if (d.enregistre_par) rang(t("f-par"), d.enregistre_par);
+  if ((d.proprietes || []).length) {
+    section(t("f-perso"));
+    d.proprietes.forEach((p) => rang(p.nom, p.valeur, p.expression || ""));
+  }
+  const nombre = (x, n) => Number(x).toLocaleString(undefined, { maximumSignificantDigits: n });
+  for (const c of d.configurations || []) {
+    section(t("f-config", c.nom));
+    rang("", t("f-geo", c.geometrie));
+    if (c.materiau) {
+      const dens = (c.materiau.physiques || {}).DENS;
+      rang(t("f-materiau"), c.materiau.nom,
+           (dens ? `${t("f-densite")} ${nombre(dens.valeur, 6)} kg/m³ · ` : "") + c.materiau.base);
+    }
+    if (c.masse) {
+      const m = c.masse;
+      rang(t("f-masse"), `${nombre(m.masse_kg * 1000, 8)} g`, t("f-masse-note"));
+      rang(t("f-volume"), `${nombre(m.volume_m3 * 1e9, 8)} mm³`);
+      rang(t("f-aire"), `${nombre(m.aire_m2 * 1e6, 8)} mm²`);
+      rang(t("f-centre"), m.centre_m.map((v) => nombre(v * 1000, 8)).join(" ; ") + " mm");
+    }
+    (c.proprietes || []).forEach((p) => rang(p.nom, p.valeur, p.expression || ""));
+  }
+  const img = $("fiche-apercu");
+  img.hidden = !d.apercu;
+  if (d.apercu) img.src = "data:image/png;base64," + d.apercu;
+  $("fiche-carte").style.display = "block";
 }
 
 // ---------------------------------------------------------------- 3D view
@@ -1897,6 +2024,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "fichier": job.result.name if job.result else "",
                 "vue": job.vue is not None,
                 "plan": job.plan is not None,
+                "fiche": job.fiche is not None,
             })
             return
         if route == "/vue" and job.vue:
@@ -1904,6 +2032,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if route == "/plan" and job.plan:
             self._send(200, "application/json", job.plan)
+            return
+        if route == "/fiche" and job.fiche:
+            self._send(200, "application/json", job.fiche)
             return
         if route == "/download" and job.result:
             self._send(
