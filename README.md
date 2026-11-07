@@ -68,6 +68,22 @@ asm = read_assembly("assembly.SLDASM")
 open("assembly.stl", "wb").write(to_stl(asm))
 ```
 
+Drop the assembly together with its part files (several files at once, or a
+zip) and it downloads as an exact STEP assembly instead: each part written
+once from its own geometry, each instance placed as the assembly says.
+Sub-assemblies are flattened; a part that is not supplied is left out and
+named in the log. On five test assemblies, every solid has the same volume
+and centre of mass as in the STEP SolidWorks exports.
+
+```python
+from sldprt.load import load_model
+from sldprt.step_assembly import write_step_assembly
+
+parts = {name: load_model(name) for name in ("cube.SLDPRT", "cylinder.SLDPRT")}
+report = write_step_assembly(read_assembly("assembly.SLDASM"), parts, "assembly.STEP")
+print(report.instances, report.missing)
+```
+
 ## Drawings
 
 The web app also shows a SolidWorks drawing (`.SLDDRW`) as SVG, sheet by

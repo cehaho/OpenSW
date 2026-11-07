@@ -29,7 +29,7 @@ import traceback
 import uuid
 import webbrowser
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -305,20 +305,85 @@ def exporter_plan(dessin, source: Path, to_dxf) -> Path:
 ROUTE_ASSEMBLAGE = "assemblage"
 
 
+def _deballer(data: bytes, dossier: Path, nom: str) -> tuple[Path, dict[str, Path]]:
+    """An uploaded zip: the assembly, and the parts by file name.
+
+    Only the name of each entry counts, never its path: nothing is written
+    outside ``dossier/pieces``. Several assemblies: the one named like the
+    zip, else the largest (a sub-assembly is smaller than its parent).
+    """
+    pieces = dossier / "pieces"
+    pieces.mkdir()
+    assemblages, fichiers = [], {}
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for info in z.infolist():
+            base = PurePosixPath(info.filename.replace("\\", "/")).name
+            if info.is_dir() or not base or base.startswith("~$"):
+                continue
+            cible = pieces / base
+            cible.write_bytes(z.read(info))
+            if base.lower().endswith(".sldasm"):
+                assemblages.append(cible)
+            elif base.lower().endswith(".sldprt"):
+                fichiers[base.lower()] = cible
+    if not assemblages:
+        raise ValueError("the zip holds no .SLDASM")
+    tete = next((a for a in assemblages if a.stem.lower() == Path(nom).stem.lower()),
+                max(assemblages, key=lambda a: a.stat().st_size))
+    return tete, fichiers
+
+
+def _step_assemblage(job: Job, asm, fichiers: dict[str, Path], sortie: Path) -> None:
+    """The exact STEP of the assembly, from the parts supplied."""
+    from sldprt.load import load_model
+    from sldprt.step_assembly import write_step_assembly
+
+    say = job.journal.say
+    voulus = {c.fichier.lower(): c.fichier for c in asm.composants if not c.supprime}
+    modeles = {}
+    with CONVERSION:
+        for cle, nom in voulus.items():
+            if cle not in fichiers:
+                continue
+            try:
+                modeles[nom] = load_model(fichiers[cle])
+            except Exception as échec:
+                say(f"{nom}: unreadable, {type(échec).__name__}: {échec}", "note")
+        rapport = write_step_assembly(asm, modeles, sortie, name=sortie.stem)
+    for nom, r in rapport.parts.items():
+        say(f"{nom}: {r.bodies} bodies, {r.faces} faces", "detail")
+    for nom, pourquoi in rapport.refused.items():
+        say(f"{nom}: no body written, {pourquoi}", "note")
+    for nom, n in rapport.missing.items():
+        say(f"part not supplied: {nom} ({n} instance(s)), left out", "note")
+    job.result = sortie
+    say(f"{sortie.name} ready to download, exact STEP, {rapport.instances} "
+        f"instance(s) of {len(rapport.parts)} part(s), {_human(sortie.stat().st_size)}",
+        "ok")
+
+
 def voir_assemblage(job: Job, data: bytes) -> None:
     """Read an assembly and keep its 3D view in memory for the page.
 
-    The uploaded file is written only while it is read, then deleted; the
-    STL export stays until the purge.
+    Alone, it gives its display mesh as STL. Uploaded with its parts (a zip,
+    or several files the page zips together), it gives an exact STEP. What
+    is uploaded is deleted as soon as it is read; the export stays until
+    the purge.
     """
     from sldprt.assembly import read_assembly, to_stl, to_view
 
     say = job.journal.say
     try:
         dossier = job.dossier = Path(tempfile.mkdtemp(prefix="opensw-"))
-        source = job.source = dossier / job.name
-        source.write_bytes(data)
         say(f"{job.name} received, {_human(len(data))}", "ok")
+        fichiers: dict[str, Path] = {}
+        if data[:4] == b"PK\x03\x04":
+            source, fichiers = _deballer(data, dossier, job.name)
+            say(f"zip: {source.name} and {len(fichiers)} part(s)", "detail")
+        else:
+            source = dossier / job.name
+            source.write_bytes(data)
+        job.source = source
         say(f"reader: {version()}", "detail")
         say("assembly: sldprt.assembly.read_assembly()", "step")
         début = time.monotonic()
@@ -335,11 +400,17 @@ def voir_assemblage(job: Job, data: bytes) -> None:
             f"{time.monotonic() - début:.1f} s (SolidWorks display mesh, "
             "not the exact geometry)", "ok")
         job.vue = json.dumps(vue).encode()
-        sortie = dossier / (source.stem + ".stl")
-        sortie.write_bytes(to_stl(asm))
-        job.result = sortie
-        say(f"{sortie.name} ready to download, {_human(sortie.stat().st_size)} "
-            "(display mesh, mm)", "ok")
+        if fichiers:
+            say("assembly STEP: sldprt.step_assembly.write_step_assembly()", "step")
+            _step_assemblage(job, asm, fichiers, dossier / (source.stem + ".STEP"))
+        else:
+            sortie = dossier / (source.stem + ".stl")
+            sortie.write_bytes(to_stl(asm))
+            job.result = sortie
+            say(f"{sortie.name} ready to download, {_human(sortie.stat().st_size)} "
+                "(display mesh, mm)", "ok")
+            say("for an exact STEP, drop the assembly together with its parts "
+                "(several files, or a zip)", "detail")
     except Exception as échec:
         job.failed = True
         say(f"{type(échec).__name__}: {échec}", "err")
@@ -347,6 +418,8 @@ def voir_assemblage(job: Job, data: bytes) -> None:
             say(ligne.rstrip(), "detail")
     finally:
         effacer_source(job)
+        if job.dossier is not None:
+            shutil.rmtree(job.dossier / "pieces", ignore_errors=True)
         job.fini_a = time.monotonic()
         job.done = True
 
@@ -573,7 +646,7 @@ HTML = r"""<!doctype html>
       <span><b data-t="depot">Drop a file</b> <span data-t="depot-ou">or click</span></span>
       <span id="depot-nom">.SLDPRT · .SLDASM · .SLDDRW · .x_t</span>
       <input type="file" id="fichier"
-             accept=".SLDPRT,.sldprt,.x_t,.X_T,.x_b,.X_B,.xmt_txt,.xmt_bin,.SLDDRW,.slddrw,.SLDASM,.sldasm">
+             multiple accept=".SLDPRT,.sldprt,.x_t,.X_T,.x_b,.X_B,.xmt_txt,.xmt_bin,.SLDDRW,.slddrw,.SLDASM,.sldasm,.zip,.ZIP">
     </label>
     <!-- Shown by the published page only (statique.js): the local server
          does receive the file. -->
@@ -708,6 +781,7 @@ const TEXTES = {
       "Cliquez sur un trait pour lire son nom.",
     "aucun-trait": "Aucun trait sous la souris.",
     "pas-plan": (n) => `${n} : pas dans cette mise en plan.`,
+    plusieurs: "Plusieurs fichiers : déposez un assemblage (.SLDASM) avec ses pièces.",
     corps: "corps",
     genres: { line: "segment", circle: "cercle", path: "arc", polygon: "polygone",
               polyline: "arête", text: "texte" },
@@ -753,6 +827,7 @@ const TEXTES = {
       "Click a line to read its name.",
     "aucun-trait": "No line under the mouse.",
     "pas-plan": (n) => `${n}: not in this drawing.`,
+    plusieurs: "Several files: drop an assembly (.SLDASM) together with its parts.",
     corps: "body",
     genres: { line: "segment", circle: "circle", path: "arc", polygon: "polygon",
               polyline: "edge", text: "text" },
@@ -826,15 +901,63 @@ function actifs(oui) {
 
 // A chosen file opens at once: a part goes through STEP (the view reads the
 // written file back); drawings and assemblies are shown as they are.
-$("fichier").addEventListener("change", () => {
+// Several files: an assembly and its parts, zipped together (stored, no
+// compression) before upload; the server turns them into an exact STEP.
+$("fichier").addEventListener("change", async () => {
   actifs(true);
   $("lien").innerHTML = "";
-  const f = $("fichier").files[0];
+  let f = $("fichier").files[0];
   if (!f) return;
+  if ($("fichier").files.length > 1) {
+    const tous = [...$("fichier").files];
+    const asm = tous.find((x) => /\.sldasm$/i.test(x.name));
+    if (!asm) {
+      ligne({ ms: 0, kind: "err", text: t("plusieurs") });
+      return;
+    }
+    f = await zipper(tous, asm.name.replace(/\.[^.]*$/, "") + ".zip");
+    const dt = new DataTransfer();
+    dt.items.add(f);
+    $("fichier").files = dt.files;
+  }
   $("depot-nom").textContent = f.name;
   exporter(/\.slddrw$/i.test(f.name) ? "plan"
-           : /\.sldasm$/i.test(f.name) ? "assemblage" : "step");
+           : /\.(sldasm|zip)$/i.test(f.name) ? "assemblage" : "step");
 });
+
+// A "stored" zip (method 0): headers and CRC-32, nothing more.
+const CRC = Array.from({ length: 256 }, (_, n) => {
+  for (let k = 0; k < 8; k++) n = n & 1 ? 0xedb88320 ^ (n >>> 1) : n >>> 1;
+  return n >>> 0;
+});
+async function zipper(fichiers, nom) {
+  const morceaux = [], central = [];
+  let decalage = 0;
+  for (const f of fichiers) {
+    const octets = new Uint8Array(await f.arrayBuffer());
+    let crc = 0xffffffff;
+    for (const b of octets) crc = CRC[(crc ^ b) & 0xff] ^ (crc >>> 8);
+    crc = (crc ^ 0xffffffff) >>> 0;
+    const n = new TextEncoder().encode(f.name);
+    const tete = new DataView(new ArrayBuffer(30));
+    [[0, 0x04034b50, 4], [4, 20, 2], [6, 0x0800, 2], [14, crc, 4],
+     [18, octets.length, 4], [22, octets.length, 4], [26, n.length, 2]]
+      .forEach(([a, v, l]) => (l === 4 ? tete.setUint32(a, v, true) : tete.setUint16(a, v, true)));
+    const c = new DataView(new ArrayBuffer(46));
+    [[0, 0x02014b50, 4], [4, 20, 2], [6, 20, 2], [8, 0x0800, 2], [16, crc, 4],
+     [20, octets.length, 4], [24, octets.length, 4], [28, n.length, 2], [42, decalage, 4]]
+      .forEach(([a, v, l]) => (l === 4 ? c.setUint32(a, v, true) : c.setUint16(a, v, true)));
+    morceaux.push(tete, n, octets);
+    central.push(c, n);
+    decalage += 30 + n.length + octets.length;
+  }
+  const taille = central.reduce((s, x) => s + x.byteLength, 0);
+  const fin = new DataView(new ArrayBuffer(22));
+  [[0, 0x06054b50, 4], [8, fichiers.length, 2], [10, fichiers.length, 2],
+   [12, taille, 4], [16, decalage, 4]]
+    .forEach(([a, v, l]) => (l === 4 ? fin.setUint32(a, v, true) : fin.setUint16(a, v, true)));
+  return new File([...morceaux, ...central, fin], nom, { type: "application/zip" });
+}
 
 // An example is downloaded, then opened as if it had been dropped.
 document.querySelectorAll("button.exemple").forEach((b) => b.addEventListener("click", async () => {
@@ -886,7 +1009,7 @@ function envoyer(url, corps) {
     e.preventDefault();
     if (!e.dataTransfer.files.length) return;
     const dt = new DataTransfer();
-    dt.items.add(e.dataTransfer.files[0]);
+    for (const f of e.dataTransfer.files) dt.items.add(f);
     $("fichier").files = dt.files;
     $("fichier").dispatchEvent(new Event("change"));
   });
