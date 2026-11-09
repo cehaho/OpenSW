@@ -650,6 +650,11 @@ HTML = r"""<!doctype html>
   #fiche-carte { display: none; }
   .fiche-titre { display: flex; flex-wrap: wrap; gap: var(--s1) 10px; align-items: baseline;
                  margin-bottom: var(--s3); font-size: 12px; }
+  #fiche-export { margin-left: auto; display: flex; gap: 6px; }
+  #fiche-export a { font-size: 11px; color: var(--text); text-decoration: none;
+                    border: 1px solid var(--border); border-radius: var(--radius);
+                    padding: 1px 8px; }
+  #fiche-export a:hover { border-color: var(--muted); }
   .fiche-titre small, #fiche-table small { color: var(--muted); font-size: 11px; }
   .fiche { display: flex; gap: var(--s4); flex-wrap: wrap; align-items: flex-start; }
   #fiche-apercu { max-width: 160px; width: 100%; border-radius: var(--radius);
@@ -876,7 +881,7 @@ HTML = r"""<!doctype html>
 
   <div class="carte" id="fiche-carte">
     <div class="fiche-titre"><b data-t="fiche">File properties</b>
-      <small data-t="fiche-note">What the file says about itself, read as is: nothing is computed.</small></div>
+      <small data-t="fiche-note">What the file says about itself, read as is: nothing is computed.</small><span id="fiche-export"></span></div>
     <div class="fiche"><img id="fiche-apercu" alt="" hidden><div id="fiche-table"></div></div>
   </div>
 
@@ -967,6 +972,9 @@ const TEXTES = {
     "f-hors": "exclu de la nomenclature",
     "f-inertie": "Inertie au centre de masse",
     "f-liens": "Textes liés",
+    "f-general": "Général",
+    "f-export-csv": "Exporter les propriétés en CSV, une ligne par valeur",
+    "f-export-json": "Exporter tout ce qui est lu, en JSON",
     "f-cotes": "Cotes",
     "f-contraintes": "Contraintes", "m-0": "coïncidente", "m-5": "distance",
     "f-csv": "Télécharger la liste des composants en CSV",
@@ -1038,6 +1046,9 @@ const TEXTES = {
     "f-hors": "excluded from the bill",
     "f-inertie": "Inertia at the centre of mass",
     "f-liens": "Linked texts",
+    "f-general": "General",
+    "f-export-csv": "Export the properties as CSV, one line per value",
+    "f-export-json": "Export everything read, as JSON",
     "f-cotes": "Dimensions",
     "f-contraintes": "Mates", "m-0": "coincident", "m-5": "distance",
     "f-csv": "Download the component list as CSV",
@@ -1320,6 +1331,11 @@ function fiche(d) {
   const tableau = (titre, entetes, lignes, classes = []) => {
     const garde = entetes.map((_, k) => k === 0 || lignes.some((l) => l[k] !== "" && l[k] != null));
     const det = bloc(titre, lignes.length);
+    for (const l of lignes) {
+      const champs = l.map((v, k) => [entetes[k], v]).slice(1).filter(([, v]) => v !== "" && v != null);
+      if (!champs.length) sortie.push([titre, l[0], entetes[0], l[0], ""]);
+      for (const [h, v] of champs) sortie.push([titre, l[0], h, v, ""]);
+    }
     const tab = document.createElement("table");
     tab.className = "fiche-tab";
     const tete = document.createElement("tr");
@@ -1338,6 +1354,9 @@ function fiche(d) {
     boite.append(tab);
     det.append(boite);
   };
+  // What the export carries: one line per value shown, under its section.
+  const sortie = [];
+  let rubrique = t("f-general");
   let table = document.createElement("table");
   table.className = "fiche-kv";
   corps.append(table);
@@ -1354,12 +1373,14 @@ function fiche(d) {
     }
     tr.append(th, td);
     table.append(tr);
+    sortie.push([rubrique, "", titre, valeur, note || ""]);
   };
   // A section of name / value pairs.
   const section = (titre, n) => {
     table = document.createElement("table");
     table.className = "fiche-kv";
     bloc(titre, n).append(table);
+    rubrique = titre;
   };
   const date = (iso) => { const x = new Date(iso); return isNaN(x) ? iso : x.toLocaleString(); };
   for (const [cle, v] of Object.entries(d.resume || {})) if (v) rang(t("r-" + cle), v);
@@ -1440,10 +1461,10 @@ function fiche(d) {
       par.set(cle, x);
     });
     tableau(t("f-nomenclature"),
-      [t("h-qte"), t("h-fichier"), t("h-config"), t("h-materiau"), ...noms],
-      [...par.values()].map(({ c, s, n }) => [String(n), c.fichier, c.configuration || "",
+      [t("h-fichier"), t("h-qte"), t("h-config"), t("h-materiau"), ...noms],
+      [...par.values()].map(({ c, s, n }) => [c.fichier, String(n), c.configuration || "",
         s.materiau, ...noms.map((k) => s.props.get(k) ?? "")]),
-      ["num"]);
+      ["", "num"]);
     tableau(t("f-composants"), [t("h-composant"), t("h-fichier"), t("h-config"), t("h-etat")],
       d.composants.map((c) => [c.nom, c.fichier, c.configuration || "", etat(c)]),
       ["", "", "", "doux"]);
@@ -1483,6 +1504,24 @@ function fiche(d) {
     a.append("csv");
     $("lien").append(a);
   }
+  // Export what is shown, one line per value (CSV), or everything read (JSON).
+  const base = ($("depot-nom").textContent || "document").replace(/\.[^.]*$/, "");
+  const lien = (texte, titre, contenu, type, nom) => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([contenu], { type }));
+    a.download = nom;
+    a.title = titre;
+    a.textContent = texte;
+    return a;
+  };
+  const cases = (xs) => xs.map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`).join(";");
+  const { apercu, ...lu } = d;
+  $("fiche-export").replaceChildren(
+    lien("csv", t("f-export-csv"),
+      "\ufeff" + [cases(["section", "item", "field", "value", "note"])].concat(sortie.map(cases)).join("\r\n") + "\r\n",
+      "text/csv", `${base}-properties.csv`),
+    lien("json", t("f-export-json"), JSON.stringify(lu, null, 1) + "\n",
+      "application/json", `${base}-properties.json`));
   const img = $("fiche-apercu");
   img.hidden = !d.apercu;
   if (d.apercu) img.src = "data:image/png;base64," + d.apercu;
