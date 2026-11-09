@@ -33,6 +33,8 @@ property more, checked against what the SolidWorks API reads back):
 from __future__ import annotations
 
 import re
+import struct
+from itertools import pairwise
 from xml.etree import ElementTree
 
 from .container import Container
@@ -51,8 +53,12 @@ _EXPRESSION = 1 << 24
 #: ``FPVals``; the ``vt:filetime`` one is a UTC date.
 _DATE = "64"
 #: The quantities of ``SW-MassProp-Config-<n>`` whose rank is known
-#: (measured on a 10 mm cube); the others stay unnamed.
-MASSE = {"centre_m": slice(0, 3), "volume_m3": 3, "aire_m2": 4, "masse_kg": 5}
+#: (measured on a 10 mm cube; the inertia on the cube and an offset block);
+#: the last two stay unnamed. The inertia is about the centre of mass, in
+#: model axes: Lxx Lyy Lzz Lxy Lxz Lyz, in kg·m², the products with the
+#: sign of the SolidWorks API (``GetMomentOfInertia(0)``).
+MASSE = {"centre_m": slice(0, 3), "volume_m3": 3, "aire_m2": 4, "masse_kg": 5,
+         "inertie_kg_m2": slice(6, 12)}
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
@@ -156,7 +162,109 @@ def _materials(container: Container) -> dict[str, dict]:
 def _mass(values: str) -> dict:
     numbers = [float(x) for x in values.split(",")]
     out = {key: numbers[r] for key, r in MASSE.items()}
-    out["autres"] = numbers[6:]
+    out["autres"] = numbers[12:]
+    return out
+
+
+#: A UTF-16 MFC ``CString`` (``FF FE FF``, a one-byte length).
+_CSTRING = re.compile(rb"\xff\xfe\xff(.)", re.S)
+
+
+def linked_texts(container: Container) -> list[dict]:
+    """The linked texts of a drawing (a title block, a note): each
+    ``$PRP…`` expression and the value it shows, as SolidWorks wrote
+    them side by side in ``Contents/Definition``."""
+    blob = container.get("Contents/Definition")
+    if blob is None:
+        return []
+    data = blob.data
+    strings = []
+    for m in _CSTRING.finditer(data):
+        end = m.end() + 2 * m.group(1)[0]
+        strings.append((m.start(), end, data[m.end():end].decode("utf-16-le", "replace")))
+    out, seen = [], set()
+    for (_, end, text), (start, _, value) in pairwise(strings):
+        if text.startswith("$PRP") and start == end and value and (text, value) not in seen:
+            seen.add((text, value))
+            out.append({"expression": text, "valeur": value})
+    return out
+
+
+#: The body shared by the parameters of ``Contents/Definition``, between the
+#: name and the value.
+_PARAMETER_BODY = bytes.fromhex("0000000000000040ffffffff00000000fffeff000000")
+_LENGTH_CLASS = b"moLengthParameter_c"
+#: An angular dimension: the same body, the value in radians.
+_ANGLE_CLASS = b"moAngleParameter_c"
+_TOLERANCE_CLASS = bytes.fromhex("ffff01001000") + b"moDimTolerance_c"
+
+
+def _parameter(data: bytes, name_start: int) -> tuple[str, float, int] | None:
+    """``(name, value, end)`` of a parameter body whose name starts at
+    ``name_start``, or ``None`` if what follows is not a dimension's."""
+    if data[name_start:name_start + 3] != bytes.fromhex("fffeff"):
+        return None
+    name_end = name_start + 4 + 2 * data[name_start + 3]
+    body = name_end + len(_PARAMETER_BODY)
+    if data[name_end:body] != _PARAMETER_BODY or body + 8 > len(data):
+        return None
+    name = data[name_start + 4:name_end].decode("utf-16-le", "replace")
+    return name, struct.unpack_from("<d", data, body)[0], body + 8
+
+
+def dimensions(container: Container) -> dict:
+    """The length dimensions of a drawing as numbers: name, value in metres
+    and, when there is one, the tolerance: its type (``swTolType_e``), its
+    upper and lower deviations, in metres.
+
+    MFC writes the class name at the first dimension only; the next ones
+    carry a two-byte class reference, followed by the same two bytes as the
+    first after its class name. A tolerance is read only when written with
+    its class name; those with a reference only are counted in
+    ``non_lues``."""
+    blob = container.get("Contents/Definition")
+    return dimensions_in(blob.data if blob is not None else b"")
+
+
+def dimensions_in(data: bytes) -> dict:
+    """The length and angle parameters of a stream, as :func:`dimensions`:
+    a drawing's, or an assembly's mate distances. A radius or diameter
+    dimension is a length holding the value shown (the diameter for a Ø
+    dimension); its symbol is in the displayed text."""
+    out = {"cotes": [], "non_lues": 0}
+    starts = []
+    for cls, kind in ((_LENGTH_CLASS, "longueur"), (_ANGLE_CLASS, "angle")):
+        i = data.find(cls)
+        if i < 0:
+            continue
+        mark = data[i + len(cls):i + len(cls) + 2]
+        starts.append((i + len(cls) + 2, kind))
+        j = starts[-1][0]
+        while (j := data.find(mark + bytes.fromhex("fffeff"), j + 1)) >= 0:
+            if j >= 2 and data[j - 1] & 0x80:  # a class reference, "xx 8y"
+                starts.append((j + 2, kind))
+    for start, kind in sorted(starts):
+        read = _parameter(data, start)
+        if read is None:
+            continue
+        name, value, end = read
+        if kind == "angle":
+            # An angle's tolerance is not measured: not read.
+            out["cotes"].append({"nom": name, "genre": "angle", "valeur_rad": value,
+                                 "tolerance": None})
+            continue
+        tolerance = None
+        if data[end + 1:end + 1 + len(_TOLERANCE_CLASS)] == _TOLERANCE_CLASS:
+            t = end + 1 + len(_TOLERANCE_CLASS)
+            kind = int.from_bytes(data[t:t + 4], "little")
+            upper, lower = struct.unpack_from("<2d", data, t + 8)
+            tolerance = {"type": kind, "haut_m": upper, "bas_m": lower}
+        elif data[end + 2] & 0x80 and data[end + 3:end + 11].count(0) >= 7:
+            # A reference followed by a type and zeros: likely a tolerance
+            # already named earlier, which is not followed.
+            out["non_lues"] += 1
+        out["cotes"].append({"nom": name, "genre": "longueur", "valeur_m": value,
+                             "tolerance": tolerance})
     return out
 
 
@@ -190,5 +298,7 @@ def read_properties(container: Container) -> dict:
         **_dates(container),
         "proprietes": properties(_xml(container, "docProps/custom.xml")),
         "configurations": configs,
+        "cotes": dimensions(container)["cotes"],
+        "liens": linked_texts(container),
         "apercu_png": png if png.startswith(PNG_SIGNATURE) else None,
     }

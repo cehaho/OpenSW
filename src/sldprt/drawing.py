@@ -135,6 +135,9 @@ class Texte:
     police: str | None = None
     gras: bool = False
     italique: bool = False
+    #: The text direction, in radians from the sheet's x axis: π/2 for the
+    #: dimension of a vertical edge.
+    angle: float = 0.0
 
 
 @dataclass
@@ -341,8 +344,13 @@ def _texte(d, at, hauteur, nom):
             continue
         texte, fin = lu
         if fin + 6 <= len(d) and unpack_from("<I", d, fin + 2)[0] == len(texte):
+            # At 40 bytes, a double sits between the point and the string:
+            # the text angle, in radians.
+            angle = unpack_from("<d", d, at + 28)[0] if ecart == 40 else 0.0
+            if not (math.isfinite(angle) and abs(angle) <= 2 * math.pi + 1e-9):
+                angle = 0.0
             return Texte(_mm(v[0]), _mm(v[1]), _mm(hauteur or 0.0035),
-                         texte.strip(), nom)
+                         texte.strip(), nom, angle=angle)
     return None
 
 
@@ -723,8 +731,11 @@ def to_svg(feuille: Feuille) -> str:
                        if el.police else "")
             famille += ' font-weight="bold"' if el.gras else ""
             famille += ' font-style="italic"' if el.italique else ""
+            # SVG counts its angles clockwise.
+            turn = (f' transform="rotate({_f(-math.degrees(el.angle))} {_f(el.x)} '
+                    f'{y(el.y)})"' if abs(el.angle) > 1e-9 else "")
             out.append(f'<text data-nom="{el.nom}"{_teinte(el, "fill")}{famille} '
-                       f'x="{_f(el.x)}" y="{y(el.y)}" font-size="{_f(el.hauteur)}" '
+                       f'x="{_f(el.x)}" y="{y(el.y)}" font-size="{_f(el.hauteur)}"{turn} '
                        f'dominant-baseline="text-after-edge">{_esc(el.texte)}</text>')
     out.append("</svg>")
     return "\n".join(out)
@@ -834,9 +845,14 @@ def to_dxf(feuille: Feuille) -> str:
         elif isinstance(el, Texte):
             # The stored point is the bottom of the text box; the baseline
             # sits 0.289 h above it (see to_svg).
-            out.extend(["0", "TEXT", "8", "TEXT", "62", c, "10", g(el.x),
-                        "20", g(el.y + 0.289 * el.hauteur), "30", "0",
+            # For a turned text, "above" turns with it.
+            lift = 0.289 * el.hauteur
+            out.extend(["0", "TEXT", "8", "TEXT", "62", c,
+                        "10", g(el.x - lift * math.sin(el.angle)),
+                        "20", g(el.y + lift * math.cos(el.angle)), "30", "0",
                         "40", g(el.hauteur), "1", _dxf_texte(el.texte)])
+            if abs(el.angle) > 1e-9:
+                out.extend(["50", g(math.degrees(el.angle))])
     for vue in feuille.vues:
         calque = _calque(vue.nom)
         for a in vue.aretes:

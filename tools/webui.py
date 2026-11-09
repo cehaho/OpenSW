@@ -131,6 +131,10 @@ class Job:
         self.vue: bytes | None = None
         self.plan: bytes | None = None
         self.fiche: bytes | None = None
+        self.composants: list | None = None
+        #: The records of the parts supplied with the assembly, by file.
+        self.pieces: dict = {}
+        self.contraintes: list | None = None
 
 
 JOBS: dict[str, Job] = {}
@@ -203,6 +207,10 @@ def lire_fiche(job: Job) -> None:
         return
     png = f.pop("apercu_png")
     f["apercu"] = base64.b64encode(png).decode() if png else None
+    if job.composants is not None:
+        f["composants"] = job.composants
+        f["contraintes"] = job.contraintes or []
+        f["pieces"] = job.pieces
     job.fiche = json.dumps(f).encode()
 
 
@@ -376,12 +384,41 @@ def _step_assemblage(job: Job, asm, fichiers: dict[str, Path], sortie: Path) -> 
         say(f"{nom}: {r.bodies} bodies, {r.faces} faces", "detail")
     for nom, pourquoi in rapport.refused.items():
         say(f"{nom}: no body written, {pourquoi}", "note")
+    if rapport.suppressed or rapport.hidden:
+        say(f"not exported, as in SolidWorks: {rapport.suppressed} suppressed, "
+            f"{rapport.hidden} hidden", "detail")
     for nom, n in rapport.missing.items():
         say(f"part not supplied: {nom} ({n} instance(s)), left out", "note")
     job.result = sortie
     say(f"{sortie.name} ready to download, exact STEP, {rapport.instances} "
         f"instance(s) of {len(rapport.parts)} part(s), {_human(sortie.stat().st_size)}",
         "ok")
+
+
+def _fiches_pieces(asm, fichiers: dict[str, Path]) -> dict:
+    """What each supplied part says about itself, for the bill of
+    materials: its properties and, per configuration, its properties and
+    material. Read in the part, never computed; a missing part has none."""
+    from sldprt import open_container
+    from sldprt.properties import read_properties
+
+    out = {}
+    for nom in dict.fromkeys(c.fichier for c in asm.composants):
+        chemin = fichiers.get(nom.lower())
+        if chemin is None:
+            continue
+        try:
+            f = read_properties(open_container(chemin))
+        except Exception:
+            continue
+        out[nom] = {
+            "proprietes": [[p["nom"], p["valeur"]] for p in f["proprietes"]],
+            "configurations": {
+                c["nom"]: {"proprietes": [[p["nom"], p["valeur"]] for p in c["proprietes"]],
+                           "materiau": (c.get("materiau") or {}).get("nom") or ""}
+                for c in f["configurations"]},
+        }
+    return out
 
 
 def voir_assemblage(job: Job, data: bytes) -> None:
@@ -415,6 +452,15 @@ def voir_assemblage(job: Job, data: bytes) -> None:
             triangles = sum(len(f) for f in c.faces)
             say(f"{c.nom}{etat}: {c.fichier}, {len(c.faces)} faces, "
                 f"{triangles} triangles", "detail")
+        # The component list, as the tree gives it: the page groups it
+        # into a bill of materials by file.
+        job.composants = [{"nom": c.nom, "fichier": c.fichier, "cache": c.cache,
+                           "supprime": c.supprime,
+                           "hors_nomenclature": c.hors_nomenclature,
+                           "configuration": c.configuration} for c in asm.composants]
+        job.pieces = _fiches_pieces(asm, fichiers)
+        job.contraintes = [{"nom": c.nom, "type": c.type, "libelle": c.libelle,
+                            "valeur_m": c.valeur_m} for c in asm.contraintes]
         for motif, n in asm.non_lus.items():
             say(f"not shown: {motif}, {n}", "note")
         vue = to_view(asm)
@@ -604,16 +650,34 @@ HTML = r"""<!doctype html>
   #fiche-carte { display: none; }
   .fiche-titre { display: flex; flex-wrap: wrap; gap: var(--s1) 10px; align-items: baseline;
                  margin-bottom: var(--s3); font-size: 12px; }
+  #fiche-export { margin-left: auto; display: flex; gap: 6px; }
+  #fiche-export a { font-size: 11px; color: var(--text); text-decoration: none;
+                    border: 1px solid var(--border); border-radius: var(--radius);
+                    padding: 1px 8px; }
+  #fiche-export a:hover { border-color: var(--muted); }
   .fiche-titre small, #fiche-table small { color: var(--muted); font-size: 11px; }
   .fiche { display: flex; gap: var(--s4); flex-wrap: wrap; align-items: flex-start; }
   #fiche-apercu { max-width: 160px; width: 100%; border-radius: var(--radius);
                   border: 1px solid var(--border); background: #fff; }
-  #fiche-table { border-collapse: collapse; flex: 1 1 240px; }
-  #fiche-table th { text-align: left; color: var(--muted); font-weight: 400;
-                    padding: 3px var(--s3) 3px 0; vertical-align: top; white-space: nowrap; }
-  #fiche-table td { overflow-wrap: anywhere; padding: 3px 0; }
-  #fiche-table .fiche-section th { color: var(--text); font-weight: 600; padding-top: var(--s3);
-                                   border-bottom: 1px solid var(--border); }
+  #fiche-table { flex: 1 1 360px; min-width: 0; font-size: 12px; }
+  /* A section: collapsible, its lines as a table. */
+  .fiche-kv { border-collapse: collapse; }
+  .fiche-kv th { text-align: left; color: var(--muted); font-weight: 400; max-width: 16em;
+                 padding: 3px var(--s3) 3px 0; vertical-align: top; overflow-wrap: anywhere; }
+  .fiche-kv td { overflow-wrap: anywhere; padding: 3px 0; }
+  .fiche-bloc { margin-top: var(--s3); }
+  .fiche-bloc > summary { cursor: pointer; font-weight: 600; padding: 4px 0;
+                          border-bottom: 1px solid var(--border); }
+  .fiche-bloc > summary small { font-weight: 400; margin-left: 6px; }
+  .fiche-defile { max-height: 340px; overflow: auto; }
+  .fiche-tab { border-collapse: collapse; }
+  .fiche-tab th { position: sticky; top: 0; background: var(--surface); text-align: left;
+                  color: var(--muted); font-weight: 400; white-space: nowrap;
+                  padding: 4px var(--s3) 4px 0; border-bottom: 1px solid var(--border); }
+  .fiche-tab td { padding: 3px var(--s3) 3px 0; vertical-align: top; white-space: nowrap; }
+  .fiche-tab tbody tr:nth-child(even) td { background: var(--soft); }
+  .fiche-tab .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .fiche-tab .doux { color: var(--muted); }
   /* The log, folded: it opens on a click, or by itself on an error. */
   #journal { padding: 0; overflow: hidden; }
   #journal summary {
@@ -817,8 +881,8 @@ HTML = r"""<!doctype html>
 
   <div class="carte" id="fiche-carte">
     <div class="fiche-titre"><b data-t="fiche">File properties</b>
-      <small data-t="fiche-note">What the file says about itself, read as is: nothing is computed.</small></div>
-    <div class="fiche"><img id="fiche-apercu" alt="" hidden><table id="fiche-table"></table></div>
+      <small data-t="fiche-note">What the file says about itself, read as is: nothing is computed.</small><span id="fiche-export"></span></div>
+    <div class="fiche"><img id="fiche-apercu" alt="" hidden><div id="fiche-table"></div></div>
   </div>
 
   <details class="carte" id="journal">
@@ -899,6 +963,21 @@ const TEXTES = {
     "f-masse": "Masse", "f-volume": "Volume", "f-aire": "Aire",
     "f-centre": "Centre de gravité",
     "f-masse-note": "écrites par SolidWorks parce qu'une propriété y est liée",
+    "h-qte": "Qté", "h-fichier": "Fichier", "h-config": "Configuration",
+    "h-materiau": "Matériau", "h-composant": "Composant", "h-etat": "État",
+    "h-nom": "Nom", "h-type": "Type", "h-valeur": "Valeur", "h-tolerance": "Tolérance",
+    "h-composants": "Composants",
+    "f-nomenclature": "Nomenclature", "f-composants": "Composants",
+    "f-cache": "caché", "f-supprime": "supprimé, hors nomenclature",
+    "f-hors": "exclu de la nomenclature",
+    "f-inertie": "Inertie au centre de masse",
+    "f-liens": "Textes liés",
+    "f-general": "Général",
+    "f-export-csv": "Exporter les propriétés en CSV, une ligne par valeur",
+    "f-export-json": "Exporter tout ce qui est lu, en JSON",
+    "f-cotes": "Cotes",
+    "f-contraintes": "Contraintes", "m-0": "coïncidente", "m-5": "distance",
+    "f-csv": "Télécharger la liste des composants en CSV",
     plusieurs: "Plusieurs fichiers : déposez un assemblage (.SLDASM) avec ses pièces.",
     corps: "corps",
     genres: { line: "segment", circle: "cercle", path: "arc", polygon: "polygone",
@@ -958,6 +1037,21 @@ const TEXTES = {
     "f-masse": "Mass", "f-volume": "Volume", "f-aire": "Area",
     "f-centre": "Centre of mass",
     "f-masse-note": "written by SolidWorks because a property links to them",
+    "h-qte": "Qty", "h-fichier": "File", "h-config": "Configuration",
+    "h-materiau": "Material", "h-composant": "Component", "h-etat": "State",
+    "h-nom": "Name", "h-type": "Type", "h-valeur": "Value", "h-tolerance": "Tolerance",
+    "h-composants": "Components",
+    "f-nomenclature": "Bill of materials", "f-composants": "Components",
+    "f-cache": "hidden", "f-supprime": "suppressed, left out of the bill",
+    "f-hors": "excluded from the bill",
+    "f-inertie": "Inertia at the centre of mass",
+    "f-liens": "Linked texts",
+    "f-general": "General",
+    "f-export-csv": "Export the properties as CSV, one line per value",
+    "f-export-json": "Export everything read, as JSON",
+    "f-cotes": "Dimensions",
+    "f-contraintes": "Mates", "m-0": "coincident", "m-5": "distance",
+    "f-csv": "Download the component list as CSV",
     plusieurs: "Several files: drop an assembly (.SLDASM) together with its parts.",
     corps: "body",
     genres: { line: "segment", circle: "circle", path: "arc", polygon: "polygon",
@@ -1213,8 +1307,59 @@ async function exporter(route) {
 // What the file says about itself. The values come from the file: they are
 // set as text, never as HTML.
 function fiche(d) {
-  const table = $("fiche-table");
-  table.replaceChildren();
+  const corps = $("fiche-table");
+  corps.replaceChildren();
+  const cellule = (tag, texte, classe) => {
+    const e = document.createElement(tag);
+    e.textContent = texte ?? "";
+    if (classe) e.className = classe;
+    return e;
+  };
+  // A section: collapsible, open by default when short.
+  const bloc = (titre, n) => {
+    const det = document.createElement("details");
+    det.className = "fiche-bloc";
+    det.open = !(n > 12);
+    const resume = cellule("summary", titre);
+    if (n != null) resume.append(cellule("small", String(n)));
+    det.append(resume);
+    corps.append(det);
+    return det;
+  };
+  // A table: one column per header, one row per item; columns empty
+  // everywhere are dropped.
+  const tableau = (titre, entetes, lignes, classes = []) => {
+    const garde = entetes.map((_, k) => k === 0 || lignes.some((l) => l[k] !== "" && l[k] != null));
+    const det = bloc(titre, lignes.length);
+    for (const l of lignes) {
+      const champs = l.map((v, k) => [entetes[k], v]).slice(1).filter(([, v]) => v !== "" && v != null);
+      if (!champs.length) sortie.push([titre, l[0], entetes[0], l[0], ""]);
+      for (const [h, v] of champs) sortie.push([titre, l[0], h, v, ""]);
+    }
+    const tab = document.createElement("table");
+    tab.className = "fiche-tab";
+    const tete = document.createElement("tr");
+    entetes.forEach((h, k) => garde[k] && tete.append(cellule("th", h, classes[k])));
+    const thead = document.createElement("thead");
+    thead.append(tete);
+    const tbody = document.createElement("tbody");
+    for (const l of lignes) {
+      const tr = document.createElement("tr");
+      l.forEach((v, k) => garde[k] && tr.append(cellule("td", v, classes[k])));
+      tbody.append(tr);
+    }
+    tab.append(thead, tbody);
+    const boite = document.createElement("div");
+    boite.className = "fiche-defile";
+    boite.append(tab);
+    det.append(boite);
+  };
+  // What the export carries: one line per value shown, under its section.
+  const sortie = [];
+  let rubrique = t("f-general");
+  let table = document.createElement("table");
+  table.className = "fiche-kv";
+  corps.append(table);
   const rang = (titre, valeur, note) => {
     const tr = document.createElement("tr");
     const th = document.createElement("th");
@@ -1228,15 +1373,14 @@ function fiche(d) {
     }
     tr.append(th, td);
     table.append(tr);
+    sortie.push([rubrique, "", titre, valeur, note || ""]);
   };
-  const section = (titre) => {
-    const tr = document.createElement("tr");
-    tr.className = "fiche-section";
-    const th = document.createElement("th");
-    th.colSpan = 2;
-    th.textContent = titre;
-    tr.append(th);
-    table.append(tr);
+  // A section of name / value pairs.
+  const section = (titre, n) => {
+    table = document.createElement("table");
+    table.className = "fiche-kv";
+    bloc(titre, n).append(table);
+    rubrique = titre;
   };
   const date = (iso) => { const x = new Date(iso); return isNaN(x) ? iso : x.toLocaleString(); };
   for (const [cle, v] of Object.entries(d.resume || {})) if (v) rang(t("r-" + cle), v);
@@ -1244,8 +1388,26 @@ function fiche(d) {
   if (d.enregistre) rang(t("f-enregistre"), date(d.enregistre));
   if (d.enregistre_par) rang(t("f-par"), d.enregistre_par);
   if ((d.proprietes || []).length) {
-    section(t("f-perso"));
+    section(t("f-perso"), d.proprietes.length);
     d.proprietes.forEach((p) => rang(p.nom, p.valeur, p.expression || ""));
+  }
+  // Linked texts (a title block, a note): the value shown, and its expression.
+  if ((d.liens || []).length) {
+    section(t("f-liens"), d.liens.length);
+    d.liens.forEach((l) => rang(l.valeur, "", l.expression));
+  }
+  // Dimensions as numbers, in mm: the value and the tolerance as stored.
+  if ((d.cotes || []).length) {
+    const mm = (v) => Number((v * 1000).toPrecision(10)).toLocaleString();
+    // An angle is written in radians: shown in degrees, a unit change
+    // like metres to millimetres.
+    tableau(t("f-cotes"), [t("h-nom"), t("h-valeur"), t("h-tolerance")],
+      d.cotes.map((c) => [c.nom,
+        c.genre === "angle"
+          ? `${Number((c.valeur_rad * 180 / Math.PI).toPrecision(10)).toLocaleString()}°`
+          : `${mm(c.valeur_m)} mm`,
+        c.tolerance ? `+${mm(c.tolerance.haut_m)} / ${mm(c.tolerance.bas_m)} mm` : ""]),
+      ["", "num", "num"]);
   }
   const nombre = (x, n) => Number(x).toLocaleString(undefined, { maximumSignificantDigits: n });
   for (const c of d.configurations || []) {
@@ -1262,9 +1424,104 @@ function fiche(d) {
       rang(t("f-volume"), `${nombre(m.volume_m3 * 1e9, 8)} mm³`);
       rang(t("f-aire"), `${nombre(m.aire_m2 * 1e6, 8)} mm²`);
       rang(t("f-centre"), m.centre_m.map((v) => nombre(v * 1000, 8)).join(" ; ") + " mm");
+      // At the centre of mass, model axes, in g·mm² as SolidWorks shows it.
+      if (m.inertie_kg_m2) {
+        const g = m.inertie_kg_m2.map((v) => nombre(v * 1e9, 8));
+        rang(t("f-inertie"), `Lxx ${g[0]} ; Lyy ${g[1]} ; Lzz ${g[2]}`, "g·mm²");
+        rang("", `Lxy ${g[3]} ; Lxz ${g[4]} ; Lyz ${g[5]}`, "g·mm²");
+      }
     }
     (c.proprietes || []).forEach((p) => rang(p.nom, p.valeur, p.expression || ""));
   }
+  // An assembly: its bill of materials (one row per part file, suppressed
+  // components left out), then each component; a CSV of the former.
+  if ((d.composants || []).length) {
+    // What each supplied part says about itself: material and the
+    // properties of the configuration shown, over the document's.
+    const pieces = d.pieces || {};
+    const specs = (c) => {
+      const p = pieces[c.fichier];
+      if (!p) return { materiau: "", props: new Map() };
+      const conf = p.configurations[c.configuration] ||
+        Object.values(p.configurations)[0] || { proprietes: [], materiau: "" };
+      return { materiau: conf.materiau, props: new Map([...p.proprietes, ...conf.proprietes]) };
+    };
+    const lus = d.composants.map(specs);
+    const noms = [...new Set(lus.flatMap((s) => [...s.props.keys()]))];
+    const etat = (c) => c.supprime ? t("f-supprime") : c.hors_nomenclature ? t("f-hors")
+      : c.cache ? t("f-cache") : "";
+    // The bill of materials: one line per file and configuration,
+    // suppressed or excluded components left out.
+    const par = new Map();
+    d.composants.forEach((c, i) => {
+      if (c.supprime || c.hors_nomenclature) return;
+      const cle = `${c.fichier}\u0000${c.configuration || ""}`;
+      const x = par.get(cle) || { c, s: lus[i], n: 0 };
+      x.n += 1;
+      par.set(cle, x);
+    });
+    tableau(t("f-nomenclature"),
+      [t("h-fichier"), t("h-qte"), t("h-config"), t("h-materiau"), ...noms],
+      [...par.values()].map(({ c, s, n }) => [c.fichier, String(n), c.configuration || "",
+        s.materiau, ...noms.map((k) => s.props.get(k) ?? "")]),
+      ["", "num"]);
+    tableau(t("f-composants"), [t("h-composant"), t("h-fichier"), t("h-config"), t("h-etat")],
+      d.composants.map((c) => [c.nom, c.fichier, c.configuration || "", etat(c)]),
+      ["", "", "", "doux"]);
+    // The mates, as the tree names them; the type when measured.
+    if ((d.contraintes || []).length) {
+      tableau(t("f-contraintes"), [t("h-nom"), t("h-type"), t("h-valeur"), t("h-composants")],
+        d.contraintes.map((c) => {
+          const lib = c.libelle || "";
+          const p = lib.indexOf(" (");
+          return [p > 0 ? lib.slice(0, p) : (lib || c.nom), t("m-" + c.type) || `type ${c.type}`,
+            c.valeur_m == null ? "" : `${+(c.valeur_m * 1000).toPrecision(12)} mm`,
+            p > 0 ? lib.slice(p + 2, -1).replace(/,/g, ", ") : ""];
+        }),
+        ["", "", "num", "doux"]);
+    }
+    // The CSV is the list as the file gives it, one component per line: a
+    // button next to the other downloads.
+    const champ = (x) => `"${String(x).replace(/"/g, '""')}"`;
+    const ligne = (xs) => xs.map(champ).join(";");
+    // Each line also carries what its part says about itself, one column
+    // per property name, in the order met.
+    const csv = [ligne(["component", "file", "configuration", "state", "in_bom",
+                        "material", ...noms])]
+      .concat(d.composants.map((c, i) => ligne([c.nom, c.fichier, c.configuration || "",
+        c.supprime ? "suppressed" : c.cache ? "hidden" : "",
+        c.supprime || c.hors_nomenclature ? "no" : "yes",
+        lus[i].materiau, ...noms.map((n) => lus[i].props.get(n) ?? "")])))
+      .join("\r\n") + "\r\n";
+    $("lien").querySelector("a.csv")?.remove();
+    const a = document.createElement("a");
+    a.className = "action telecharger csv";
+    a.href = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv" }));
+    a.download = ($("depot-nom").textContent || "assembly").replace(/\.[^.]*$/, "") +
+      "-components.csv";
+    a.title = t("f-csv");
+    a.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>`;
+    a.append("csv");
+    $("lien").append(a);
+  }
+  // Export what is shown, one line per value (CSV), or everything read (JSON).
+  const base = ($("depot-nom").textContent || "document").replace(/\.[^.]*$/, "");
+  const lien = (texte, titre, contenu, type, nom) => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([contenu], { type }));
+    a.download = nom;
+    a.title = titre;
+    a.textContent = texte;
+    return a;
+  };
+  const cases = (xs) => xs.map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`).join(";");
+  const { apercu, ...lu } = d;
+  $("fiche-export").replaceChildren(
+    lien("csv", t("f-export-csv"),
+      "\ufeff" + [cases(["section", "item", "field", "value", "note"])].concat(sortie.map(cases)).join("\r\n") + "\r\n",
+      "text/csv", `${base}-properties.csv`),
+    lien("json", t("f-export-json"), JSON.stringify(lu, null, 1) + "\n",
+      "application/json", `${base}-properties.json`));
   const img = $("fiche-apercu");
   img.hidden = !d.apercu;
   if (d.apercu) img.src = "data:image/png;base64," + d.apercu;

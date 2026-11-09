@@ -53,6 +53,8 @@ class AssemblyReport:
     refused: dict[str, str] = field(default_factory=dict)
     #: Suppressed components, which a STEP does not carry.
     suppressed: int = 0
+    #: Hidden components, which SolidWorks does not export either.
+    hidden: int = 0
 
 
 def write_step_assembly(asm: Assembly, parts: dict[str, Model], path: str | Path,
@@ -154,6 +156,9 @@ def write_step_assembly(asm: Assembly, parts: dict[str, Model], path: str | Path
     for c in asm.composants:
         if c.supprime:
             report.suppressed += 1
+            continue
+        if c.cache:
+            report.hidden += 1
             continue
         if c.fichier.lower() not in by_name:
             report.missing[c.fichier] = report.missing.get(c.fichier, 0) + 1
