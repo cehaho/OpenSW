@@ -57,6 +57,10 @@ class Composant:
     #: Display mesh faces, each a list of triangles ``((x, y, z) ×3)`` in
     #: metres, **in the part's frame**.
     faces: list[list[tuple]] = field(default_factory=list)
+    #: ``swExcludeFromBOM``: excluded from the bill of materials.
+    hors_nomenclature: bool = False
+    #: The part configuration the instance shows (``swConfigurationName``).
+    configuration: str = ""
 
     def placer(self, p) -> tuple[float, float, float]:
         """A part point (m) in the assembly (m): ``p·R + t``."""
@@ -147,8 +151,10 @@ def _arbre(xml: bytes) -> list[Composant]:
                     descendre(sous, matrice, f"{prefixe}{nom}/", c, s)
                     continue
             chemin = fichier.get("swPath", "") if fichier is not None else ""
-            out.append(Composant(f"{prefixe}{nom}", PureWindowsPath(chemin).name,
-                                 matrice, c, s))
+            out.append(Composant(
+                f"{prefixe}{nom}", PureWindowsPath(chemin).name, matrice, c, s,
+                hors_nomenclature=ref.get("swExcludeFromBOM") == "YES",
+                configuration=ref.get("swConfigurationName") or ""))
 
     modele = modele_de(tete.get("id"))
     if modele is None:
@@ -381,6 +387,15 @@ def read_assembly(source: str | Path | Container) -> Assembly:
         if not c.faces and not c.supprime:
             non_lus["component with no mesh"] = non_lus.get(
                 "component with no mesh", 0) + 1
+    # A suppressed component keeps its directory entry, with no mesh: that
+    # is not a mesh left unread.
+    n = non_lus.get("component with no mesh read", 0) - sum(
+        1 for c in composants if c.supprime and not c.faces)
+    if "component with no mesh read" in non_lus:
+        if n > 0:
+            non_lus["component with no mesh read"] = n
+        else:
+            del non_lus["component with no mesh read"]
     mates = _mates(flux.get("SwDocContentMgr/SwDocContentMgrInfo"))
     return Assembly(composants, mates, non_lus)
 

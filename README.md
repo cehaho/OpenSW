@@ -18,7 +18,7 @@ It is a file reader for interoperability, not a CAD kernel or an API.
 | **Part** | the exact solid of the saved configuration (Parasolid B-rep → `.x_t`, STEP), colours, face names | the feature tree (sketches, features, equations, history): what you get is the final solid, not how it was built |
 | | properties: summary, custom and per-configuration properties, configuration names, material and density, preview image | geometry of configurations that were not saved with their geometry (the page says which ones were) |
 | | mass, volume, area, centre of mass and inertia at the centre of mass, **when SolidWorks stored them** (it does when a property links to them) | mass properties SolidWorks did not store |
-| **Assembly** | components and a bill of materials by part file (→ CSV), placements, hidden and suppressed states, mates (name, type, the components they link), the display mesh (→ STL); with its part files, an exact STEP assembly | mate values (a distance, an angle) and the faces they hold; configurations; the exact geometry, which is in the parts |
+| **Assembly** | components and a bill of materials by part file (→ CSV), placements, hidden, suppressed and excluded-from-BOM states, the configuration each instance shows, with its part files each part's properties and material in the CSV, mates (name, type, the components they link), the display mesh (→ STL); with its part files, an exact STEP assembly | mate values (a distance, an angle) and the faces they hold; configurations; the exact geometry, which is in the parts |
 | **Drawing** | sheets, lines, arcs, texts (fonts, colours), tables, model view edges, dimensions and their tolerances as drawn (→ SVG, DXF); linked texts (`$PRP:"…"`) with the value they show; dimension values and tolerances as numbers | the edges a dimension measures; angular, radius and diameter dimensions as numbers; hatches, images, centre marks, the sheet format |
 
 What is not read is counted in the log rather than hidden.
@@ -76,8 +76,12 @@ The web app shows an assembly (`.SLDASM`) in 3D from the display mesh
 SolidWorks stores in it: components, placements, hidden and suppressed
 states. Not the exact geometry, which stays in the parts. It downloads as
 STL (binary, millimetres, components placed). The file properties list its
-components with a count per part file, and its mates; the component list
-downloads as CSV.
+components with a count per part file (suppressed and excluded-from-BOM
+components left out), and its mates; the component list downloads as CSV.
+Dropped with its part files, each CSV line also carries what the part file
+says about itself: its material and its custom properties (part number,
+description, linked mass…), one column per property name, as the part
+writes them.
 
 ```python
 from sldprt.assembly import read_assembly, to_stl, to_view
@@ -90,8 +94,9 @@ Drop the assembly together with its part files (several files at once, or a
 zip) and it downloads as an exact STEP assembly instead: each part written
 once from its own geometry, each instance placed as the assembly says.
 Sub-assemblies are flattened; a part that is not supplied is left out and
-named in the log. On five test assemblies, every solid has the same volume
-and centre of mass as in the STEP SolidWorks exports.
+named in the log. Like SolidWorks, it leaves out suppressed and hidden
+components. On eight test assemblies, every solid has the same volume and
+centre of mass as in the STEP SolidWorks exports.
 
 ```python
 from sldprt.load import load_model

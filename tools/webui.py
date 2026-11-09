@@ -132,6 +132,8 @@ class Job:
         self.plan: bytes | None = None
         self.fiche: bytes | None = None
         self.composants: list | None = None
+        #: The records of the parts supplied with the assembly, by file.
+        self.pieces: dict = {}
         self.contraintes: list | None = None
 
 
@@ -208,6 +210,7 @@ def lire_fiche(job: Job) -> None:
     if job.composants is not None:
         f["composants"] = job.composants
         f["contraintes"] = job.contraintes or []
+        f["pieces"] = job.pieces
     job.fiche = json.dumps(f).encode()
 
 
@@ -381,12 +384,41 @@ def _step_assemblage(job: Job, asm, fichiers: dict[str, Path], sortie: Path) -> 
         say(f"{nom}: {r.bodies} bodies, {r.faces} faces", "detail")
     for nom, pourquoi in rapport.refused.items():
         say(f"{nom}: no body written, {pourquoi}", "note")
+    if rapport.suppressed or rapport.hidden:
+        say(f"not exported, as in SolidWorks: {rapport.suppressed} suppressed, "
+            f"{rapport.hidden} hidden", "detail")
     for nom, n in rapport.missing.items():
         say(f"part not supplied: {nom} ({n} instance(s)), left out", "note")
     job.result = sortie
     say(f"{sortie.name} ready to download, exact STEP, {rapport.instances} "
         f"instance(s) of {len(rapport.parts)} part(s), {_human(sortie.stat().st_size)}",
         "ok")
+
+
+def _fiches_pieces(asm, fichiers: dict[str, Path]) -> dict:
+    """What each supplied part says about itself, for the bill of
+    materials: its properties and, per configuration, its properties and
+    material. Read in the part, never computed; a missing part has none."""
+    from sldprt import open_container
+    from sldprt.properties import read_properties
+
+    out = {}
+    for nom in dict.fromkeys(c.fichier for c in asm.composants):
+        chemin = fichiers.get(nom.lower())
+        if chemin is None:
+            continue
+        try:
+            f = read_properties(open_container(chemin))
+        except Exception:
+            continue
+        out[nom] = {
+            "proprietes": [[p["nom"], p["valeur"]] for p in f["proprietes"]],
+            "configurations": {
+                c["nom"]: {"proprietes": [[p["nom"], p["valeur"]] for p in c["proprietes"]],
+                           "materiau": (c.get("materiau") or {}).get("nom") or ""}
+                for c in f["configurations"]},
+        }
+    return out
 
 
 def voir_assemblage(job: Job, data: bytes) -> None:
@@ -423,7 +455,10 @@ def voir_assemblage(job: Job, data: bytes) -> None:
         # The component list, as the tree gives it: the page groups it
         # into a bill of materials by file.
         job.composants = [{"nom": c.nom, "fichier": c.fichier, "cache": c.cache,
-                           "supprime": c.supprime} for c in asm.composants]
+                           "supprime": c.supprime,
+                           "hors_nomenclature": c.hors_nomenclature,
+                           "configuration": c.configuration} for c in asm.composants]
+        job.pieces = _fiches_pieces(asm, fichiers)
         job.contraintes = [{"nom": c.nom, "type": c.type, "libelle": c.libelle}
                            for c in asm.contraintes]
         for motif, n in asm.non_lus.items():
@@ -912,6 +947,7 @@ const TEXTES = {
     "f-masse-note": "écrites par SolidWorks parce qu'une propriété y est liée",
     "f-nomenclature": "Nomenclature", "f-composants": "Composants",
     "f-cache": "caché", "f-supprime": "supprimé, hors nomenclature",
+    "f-hors": "exclu de la nomenclature",
     "f-inertie": "Inertie au centre de masse",
     "f-liens": "Textes liés",
     "f-cotes": "Cotes",
@@ -978,6 +1014,7 @@ const TEXTES = {
     "f-masse-note": "written by SolidWorks because a property links to them",
     "f-nomenclature": "Bill of materials", "f-composants": "Components",
     "f-cache": "hidden", "f-supprime": "suppressed, left out of the bill",
+    "f-hors": "excluded from the bill",
     "f-inertie": "Inertia at the centre of mass",
     "f-liens": "Linked texts",
     "f-cotes": "Dimensions",
@@ -1316,13 +1353,14 @@ function fiche(d) {
   if ((d.composants || []).length) {
     const par = new Map();
     for (const c of d.composants) {
-      if (!c.supprime) par.set(c.fichier, (par.get(c.fichier) || 0) + 1);
+      if (!c.supprime && !c.hors_nomenclature) par.set(c.fichier, (par.get(c.fichier) || 0) + 1);
     }
     section(t("f-nomenclature"));
     for (const [fichier, n] of par) rang(fichier, `× ${n}`);
     section(t("f-composants"));
     for (const c of d.composants) {
-      rang(c.nom, c.fichier, c.supprime ? t("f-supprime") : c.cache ? t("f-cache") : "");
+      rang(c.nom, c.fichier, c.supprime ? t("f-supprime") : c.hors_nomenclature ? t("f-hors")
+        : c.cache ? t("f-cache") : "");
     }
     // The mates, as the tree names them; the type when it was measured.
     if ((d.contraintes || []).length) {
@@ -1333,9 +1371,26 @@ function fiche(d) {
     // button next to the other downloads.
     const champ = (x) => `"${String(x).replace(/"/g, '""')}"`;
     const ligne = (xs) => xs.map(champ).join(";");
-    const csv = [ligne(["component", "file", "state"])]
-      .concat(d.composants.map((c) => ligne([c.nom, c.fichier,
-        c.supprime ? "suppressed" : c.cache ? "hidden" : ""])))
+    // With the parts supplied, each line also carries what its part says
+    // about itself: material and the properties of the configuration
+    // shown, over the document's. One column per property name, in the
+    // order met.
+    const pieces = d.pieces || {};
+    const specs = (c) => {
+      const p = pieces[c.fichier];
+      if (!p) return { materiau: "", props: new Map() };
+      const conf = p.configurations[c.configuration] ||
+        Object.values(p.configurations)[0] || { proprietes: [], materiau: "" };
+      return { materiau: conf.materiau, props: new Map([...p.proprietes, ...conf.proprietes]) };
+    };
+    const lus = d.composants.map(specs);
+    const noms = [...new Set(lus.flatMap((s) => [...s.props.keys()]))];
+    const csv = [ligne(["component", "file", "configuration", "state", "in_bom",
+                        "material", ...noms])]
+      .concat(d.composants.map((c, i) => ligne([c.nom, c.fichier, c.configuration || "",
+        c.supprime ? "suppressed" : c.cache ? "hidden" : "",
+        c.supprime || c.hors_nomenclature ? "no" : "yes",
+        lus[i].materiau, ...noms.map((n) => lus[i].props.get(n) ?? "")])))
       .join("\r\n") + "\r\n";
     $("lien").querySelector("a.csv")?.remove();
     const a = document.createElement("a");
