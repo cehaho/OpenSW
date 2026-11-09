@@ -82,6 +82,8 @@ class Mate:
     #: The tree text: ``Coincident1 (cube<1>,cube<2>)``.
     libelle: str
     configuration: str
+    #: A distance's value, in metres; ``None`` otherwise.
+    valeur_m: float | None = None
 
 
 @dataclass
@@ -371,6 +373,24 @@ def _mates(data: bytes | None) -> list[Mate]:
 # --- assembly ----------------------------------------------------------------
 
 
+def _values(mates: list[Mate], data, non_lus: dict) -> None:
+    """Distance values: ``Config-0-MatesList`` writes one length parameter
+    per distance mate, in mate order. When the counts differ, nothing is
+    assigned."""
+    from .properties import dimensions_in
+
+    distances = [m for m in mates if m.type == 5]
+    if not distances or data is None:
+        return
+    values = [d["valeur_m"] for d in dimensions_in(bytes(data))["cotes"]
+              if d["genre"] == "longueur"]
+    if len(values) != len(distances):
+        non_lus["mate value"] = len(distances)
+        return
+    for m, v in zip(distances, values, strict=True):
+        m.valeur_m = v
+
+
 def read_assembly(source: str | Path | Container) -> Assembly:
     """An assembly ready to show: placed components and their meshes."""
     conteneur = source if isinstance(source, Container) else open_container(source)
@@ -397,6 +417,7 @@ def read_assembly(source: str | Path | Container) -> Assembly:
         else:
             del non_lus["component with no mesh read"]
     mates = _mates(flux.get("SwDocContentMgr/SwDocContentMgrInfo"))
+    _values(mates, flux.get("Contents/Config-0-MatesList"), non_lus)
     return Assembly(composants, mates, non_lus)
 
 

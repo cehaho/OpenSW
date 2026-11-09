@@ -459,8 +459,8 @@ def voir_assemblage(job: Job, data: bytes) -> None:
                            "hors_nomenclature": c.hors_nomenclature,
                            "configuration": c.configuration} for c in asm.composants]
         job.pieces = _fiches_pieces(asm, fichiers)
-        job.contraintes = [{"nom": c.nom, "type": c.type, "libelle": c.libelle}
-                           for c in asm.contraintes]
+        job.contraintes = [{"nom": c.nom, "type": c.type, "libelle": c.libelle,
+                            "valeur_m": c.valeur_m} for c in asm.contraintes]
         for motif, n in asm.non_lus.items():
             say(f"not shown: {motif}, {n}", "note")
         vue = to_view(asm)
@@ -1320,6 +1320,12 @@ function fiche(d) {
     const mm = (v) => Number((v * 1000).toPrecision(10)).toLocaleString();
     for (const c of d.cotes) {
       const tol = c.tolerance;
+      // An angle is written in radians: shown in degrees, a unit change
+      // like metres to millimetres.
+      if (c.genre === "angle") {
+        rang(c.nom, `${Number((c.valeur_rad * 180 / Math.PI).toPrecision(10)).toLocaleString()}°`);
+        continue;
+      }
       rang(c.nom, `${mm(c.valeur_m)} mm`,
            tol ? `+${mm(tol.haut_m)} / ${mm(tol.bas_m)} mm` : "");
     }
@@ -1365,7 +1371,11 @@ function fiche(d) {
     // The mates, as the tree names them; the type when it was measured.
     if ((d.contraintes || []).length) {
       section(t("f-contraintes"));
-      for (const c of d.contraintes) rang(c.libelle || c.nom, t("m-" + c.type) || `type ${c.type}`);
+      for (const c of d.contraintes) {
+        const genre = t("m-" + c.type) || `type ${c.type}`;
+        rang(c.libelle || c.nom, c.valeur_m == null ? genre
+          : `${genre} ${+(c.valeur_m * 1000).toPrecision(12)}`, c.valeur_m == null ? "" : "mm");
+      }
     }
     // The CSV is the list as the file gives it, one component per line: a
     // button next to the other downloads.

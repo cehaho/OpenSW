@@ -194,6 +194,8 @@ def linked_texts(container: Container) -> list[dict]:
 #: name and the value.
 _PARAMETER_BODY = bytes.fromhex("0000000000000040ffffffff00000000fffeff000000")
 _LENGTH_CLASS = b"moLengthParameter_c"
+#: An angular dimension: the same body, the value in radians.
+_ANGLE_CLASS = b"moAngleParameter_c"
 _TOLERANCE_CLASS = bytes.fromhex("ffff01001000") + b"moDimTolerance_c"
 
 
@@ -221,24 +223,36 @@ def dimensions(container: Container) -> dict:
     its class name; those with a reference only are counted in
     ``non_lues``."""
     blob = container.get("Contents/Definition")
+    return dimensions_in(blob.data if blob is not None else b"")
+
+
+def dimensions_in(data: bytes) -> dict:
+    """The length and angle parameters of a stream, as :func:`dimensions`:
+    a drawing's, or an assembly's mate distances. A radius or diameter
+    dimension is a length holding the value shown (the diameter for a Ø
+    dimension); its symbol is in the displayed text."""
     out = {"cotes": [], "non_lues": 0}
-    if blob is None:
-        return out
-    data = blob.data
-    i = data.find(_LENGTH_CLASS)
-    if i < 0:
-        return out
-    mark = data[i + len(_LENGTH_CLASS):i + len(_LENGTH_CLASS) + 2]
-    starts = [i + len(_LENGTH_CLASS) + 2]
-    j = starts[0]
-    while (j := data.find(mark + bytes.fromhex("fffeff"), j + 1)) >= 0:
-        if j >= 2 and data[j - 1] & 0x80:  # a class reference, "xx 8y"
-            starts.append(j + 2)
-    for start in starts:
+    starts = []
+    for cls, kind in ((_LENGTH_CLASS, "longueur"), (_ANGLE_CLASS, "angle")):
+        i = data.find(cls)
+        if i < 0:
+            continue
+        mark = data[i + len(cls):i + len(cls) + 2]
+        starts.append((i + len(cls) + 2, kind))
+        j = starts[-1][0]
+        while (j := data.find(mark + bytes.fromhex("fffeff"), j + 1)) >= 0:
+            if j >= 2 and data[j - 1] & 0x80:  # a class reference, "xx 8y"
+                starts.append((j + 2, kind))
+    for start, kind in sorted(starts):
         read = _parameter(data, start)
         if read is None:
             continue
         name, value, end = read
+        if kind == "angle":
+            # An angle's tolerance is not measured: not read.
+            out["cotes"].append({"nom": name, "genre": "angle", "valeur_rad": value,
+                                 "tolerance": None})
+            continue
         tolerance = None
         if data[end + 1:end + 1 + len(_TOLERANCE_CLASS)] == _TOLERANCE_CLASS:
             t = end + 1 + len(_TOLERANCE_CLASS)
@@ -249,7 +263,8 @@ def dimensions(container: Container) -> dict:
             # A reference followed by a type and zeros: likely a tolerance
             # already named earlier, which is not followed.
             out["non_lues"] += 1
-        out["cotes"].append({"nom": name, "valeur_m": value, "tolerance": tolerance})
+        out["cotes"].append({"nom": name, "genre": "longueur", "valeur_m": value,
+                             "tolerance": tolerance})
     return out
 
 
