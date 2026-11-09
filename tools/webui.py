@@ -654,12 +654,25 @@ HTML = r"""<!doctype html>
   .fiche { display: flex; gap: var(--s4); flex-wrap: wrap; align-items: flex-start; }
   #fiche-apercu { max-width: 160px; width: 100%; border-radius: var(--radius);
                   border: 1px solid var(--border); background: #fff; }
-  #fiche-table { border-collapse: collapse; flex: 1 1 240px; }
-  #fiche-table th { text-align: left; color: var(--muted); font-weight: 400;
-                    padding: 3px var(--s3) 3px 0; vertical-align: top; white-space: nowrap; }
-  #fiche-table td { overflow-wrap: anywhere; padding: 3px 0; }
-  #fiche-table .fiche-section th { color: var(--text); font-weight: 600; padding-top: var(--s3);
-                                   border-bottom: 1px solid var(--border); }
+  #fiche-table { flex: 1 1 360px; min-width: 0; font-size: 12px; }
+  /* A section: collapsible, its lines as a table. */
+  .fiche-kv { border-collapse: collapse; }
+  .fiche-kv th { text-align: left; color: var(--muted); font-weight: 400; max-width: 16em;
+                 padding: 3px var(--s3) 3px 0; vertical-align: top; overflow-wrap: anywhere; }
+  .fiche-kv td { overflow-wrap: anywhere; padding: 3px 0; }
+  .fiche-bloc { margin-top: var(--s3); }
+  .fiche-bloc > summary { cursor: pointer; font-weight: 600; padding: 4px 0;
+                          border-bottom: 1px solid var(--border); }
+  .fiche-bloc > summary small { font-weight: 400; margin-left: 6px; }
+  .fiche-defile { max-height: 340px; overflow: auto; }
+  .fiche-tab { border-collapse: collapse; }
+  .fiche-tab th { position: sticky; top: 0; background: var(--surface); text-align: left;
+                  color: var(--muted); font-weight: 400; white-space: nowrap;
+                  padding: 4px var(--s3) 4px 0; border-bottom: 1px solid var(--border); }
+  .fiche-tab td { padding: 3px var(--s3) 3px 0; vertical-align: top; white-space: nowrap; }
+  .fiche-tab tbody tr:nth-child(even) td { background: var(--soft); }
+  .fiche-tab .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .fiche-tab .doux { color: var(--muted); }
   /* The log, folded: it opens on a click, or by itself on an error. */
   #journal { padding: 0; overflow: hidden; }
   #journal summary {
@@ -864,7 +877,7 @@ HTML = r"""<!doctype html>
   <div class="carte" id="fiche-carte">
     <div class="fiche-titre"><b data-t="fiche">File properties</b>
       <small data-t="fiche-note">What the file says about itself, read as is: nothing is computed.</small></div>
-    <div class="fiche"><img id="fiche-apercu" alt="" hidden><table id="fiche-table"></table></div>
+    <div class="fiche"><img id="fiche-apercu" alt="" hidden><div id="fiche-table"></div></div>
   </div>
 
   <details class="carte" id="journal">
@@ -945,6 +958,10 @@ const TEXTES = {
     "f-masse": "Masse", "f-volume": "Volume", "f-aire": "Aire",
     "f-centre": "Centre de gravité",
     "f-masse-note": "écrites par SolidWorks parce qu'une propriété y est liée",
+    "h-qte": "Qté", "h-fichier": "Fichier", "h-config": "Configuration",
+    "h-materiau": "Matériau", "h-composant": "Composant", "h-etat": "État",
+    "h-nom": "Nom", "h-type": "Type", "h-valeur": "Valeur", "h-tolerance": "Tolérance",
+    "h-composants": "Composants",
     "f-nomenclature": "Nomenclature", "f-composants": "Composants",
     "f-cache": "caché", "f-supprime": "supprimé, hors nomenclature",
     "f-hors": "exclu de la nomenclature",
@@ -1012,6 +1029,10 @@ const TEXTES = {
     "f-masse": "Mass", "f-volume": "Volume", "f-aire": "Area",
     "f-centre": "Centre of mass",
     "f-masse-note": "written by SolidWorks because a property links to them",
+    "h-qte": "Qty", "h-fichier": "File", "h-config": "Configuration",
+    "h-materiau": "Material", "h-composant": "Component", "h-etat": "State",
+    "h-nom": "Name", "h-type": "Type", "h-valeur": "Value", "h-tolerance": "Tolerance",
+    "h-composants": "Components",
     "f-nomenclature": "Bill of materials", "f-composants": "Components",
     "f-cache": "hidden", "f-supprime": "suppressed, left out of the bill",
     "f-hors": "excluded from the bill",
@@ -1275,8 +1296,51 @@ async function exporter(route) {
 // What the file says about itself. The values come from the file: they are
 // set as text, never as HTML.
 function fiche(d) {
-  const table = $("fiche-table");
-  table.replaceChildren();
+  const corps = $("fiche-table");
+  corps.replaceChildren();
+  const cellule = (tag, texte, classe) => {
+    const e = document.createElement(tag);
+    e.textContent = texte ?? "";
+    if (classe) e.className = classe;
+    return e;
+  };
+  // A section: collapsible, open by default when short.
+  const bloc = (titre, n) => {
+    const det = document.createElement("details");
+    det.className = "fiche-bloc";
+    det.open = !(n > 12);
+    const resume = cellule("summary", titre);
+    if (n != null) resume.append(cellule("small", String(n)));
+    det.append(resume);
+    corps.append(det);
+    return det;
+  };
+  // A table: one column per header, one row per item; columns empty
+  // everywhere are dropped.
+  const tableau = (titre, entetes, lignes, classes = []) => {
+    const garde = entetes.map((_, k) => k === 0 || lignes.some((l) => l[k] !== "" && l[k] != null));
+    const det = bloc(titre, lignes.length);
+    const tab = document.createElement("table");
+    tab.className = "fiche-tab";
+    const tete = document.createElement("tr");
+    entetes.forEach((h, k) => garde[k] && tete.append(cellule("th", h, classes[k])));
+    const thead = document.createElement("thead");
+    thead.append(tete);
+    const tbody = document.createElement("tbody");
+    for (const l of lignes) {
+      const tr = document.createElement("tr");
+      l.forEach((v, k) => garde[k] && tr.append(cellule("td", v, classes[k])));
+      tbody.append(tr);
+    }
+    tab.append(thead, tbody);
+    const boite = document.createElement("div");
+    boite.className = "fiche-defile";
+    boite.append(tab);
+    det.append(boite);
+  };
+  let table = document.createElement("table");
+  table.className = "fiche-kv";
+  corps.append(table);
   const rang = (titre, valeur, note) => {
     const tr = document.createElement("tr");
     const th = document.createElement("th");
@@ -1291,14 +1355,11 @@ function fiche(d) {
     tr.append(th, td);
     table.append(tr);
   };
-  const section = (titre) => {
-    const tr = document.createElement("tr");
-    tr.className = "fiche-section";
-    const th = document.createElement("th");
-    th.colSpan = 2;
-    th.textContent = titre;
-    tr.append(th);
-    table.append(tr);
+  // A section of name / value pairs.
+  const section = (titre, n) => {
+    table = document.createElement("table");
+    table.className = "fiche-kv";
+    bloc(titre, n).append(table);
   };
   const date = (iso) => { const x = new Date(iso); return isNaN(x) ? iso : x.toLocaleString(); };
   for (const [cle, v] of Object.entries(d.resume || {})) if (v) rang(t("r-" + cle), v);
@@ -1306,29 +1367,26 @@ function fiche(d) {
   if (d.enregistre) rang(t("f-enregistre"), date(d.enregistre));
   if (d.enregistre_par) rang(t("f-par"), d.enregistre_par);
   if ((d.proprietes || []).length) {
-    section(t("f-perso"));
+    section(t("f-perso"), d.proprietes.length);
     d.proprietes.forEach((p) => rang(p.nom, p.valeur, p.expression || ""));
   }
   // Linked texts (a title block, a note): the value shown, and its expression.
   if ((d.liens || []).length) {
-    section(t("f-liens"));
+    section(t("f-liens"), d.liens.length);
     d.liens.forEach((l) => rang(l.valeur, "", l.expression));
   }
   // Dimensions as numbers, in mm: the value and the tolerance as stored.
   if ((d.cotes || []).length) {
-    section(t("f-cotes"));
     const mm = (v) => Number((v * 1000).toPrecision(10)).toLocaleString();
-    for (const c of d.cotes) {
-      const tol = c.tolerance;
-      // An angle is written in radians: shown in degrees, a unit change
-      // like metres to millimetres.
-      if (c.genre === "angle") {
-        rang(c.nom, `${Number((c.valeur_rad * 180 / Math.PI).toPrecision(10)).toLocaleString()}°`);
-        continue;
-      }
-      rang(c.nom, `${mm(c.valeur_m)} mm`,
-           tol ? `+${mm(tol.haut_m)} / ${mm(tol.bas_m)} mm` : "");
-    }
+    // An angle is written in radians: shown in degrees, a unit change
+    // like metres to millimetres.
+    tableau(t("f-cotes"), [t("h-nom"), t("h-valeur"), t("h-tolerance")],
+      d.cotes.map((c) => [c.nom,
+        c.genre === "angle"
+          ? `${Number((c.valeur_rad * 180 / Math.PI).toPrecision(10)).toLocaleString()}°`
+          : `${mm(c.valeur_m)} mm`,
+        c.tolerance ? `+${mm(c.tolerance.haut_m)} / ${mm(c.tolerance.bas_m)} mm` : ""]),
+      ["", "num", "num"]);
   }
   const nombre = (x, n) => Number(x).toLocaleString(undefined, { maximumSignificantDigits: n });
   for (const c of d.configurations || []) {
@@ -1357,34 +1415,8 @@ function fiche(d) {
   // An assembly: its bill of materials (one row per part file, suppressed
   // components left out), then each component; a CSV of the former.
   if ((d.composants || []).length) {
-    const par = new Map();
-    for (const c of d.composants) {
-      if (!c.supprime && !c.hors_nomenclature) par.set(c.fichier, (par.get(c.fichier) || 0) + 1);
-    }
-    section(t("f-nomenclature"));
-    for (const [fichier, n] of par) rang(fichier, `× ${n}`);
-    section(t("f-composants"));
-    for (const c of d.composants) {
-      rang(c.nom, c.fichier, c.supprime ? t("f-supprime") : c.hors_nomenclature ? t("f-hors")
-        : c.cache ? t("f-cache") : "");
-    }
-    // The mates, as the tree names them; the type when it was measured.
-    if ((d.contraintes || []).length) {
-      section(t("f-contraintes"));
-      for (const c of d.contraintes) {
-        const genre = t("m-" + c.type) || `type ${c.type}`;
-        rang(c.libelle || c.nom, c.valeur_m == null ? genre
-          : `${genre} ${+(c.valeur_m * 1000).toPrecision(12)}`, c.valeur_m == null ? "" : "mm");
-      }
-    }
-    // The CSV is the list as the file gives it, one component per line: a
-    // button next to the other downloads.
-    const champ = (x) => `"${String(x).replace(/"/g, '""')}"`;
-    const ligne = (xs) => xs.map(champ).join(";");
-    // With the parts supplied, each line also carries what its part says
-    // about itself: material and the properties of the configuration
-    // shown, over the document's. One column per property name, in the
-    // order met.
+    // What each supplied part says about itself: material and the
+    // properties of the configuration shown, over the document's.
     const pieces = d.pieces || {};
     const specs = (c) => {
       const p = pieces[c.fichier];
@@ -1395,6 +1427,44 @@ function fiche(d) {
     };
     const lus = d.composants.map(specs);
     const noms = [...new Set(lus.flatMap((s) => [...s.props.keys()]))];
+    const etat = (c) => c.supprime ? t("f-supprime") : c.hors_nomenclature ? t("f-hors")
+      : c.cache ? t("f-cache") : "";
+    // The bill of materials: one line per file and configuration,
+    // suppressed or excluded components left out.
+    const par = new Map();
+    d.composants.forEach((c, i) => {
+      if (c.supprime || c.hors_nomenclature) return;
+      const cle = `${c.fichier}\u0000${c.configuration || ""}`;
+      const x = par.get(cle) || { c, s: lus[i], n: 0 };
+      x.n += 1;
+      par.set(cle, x);
+    });
+    tableau(t("f-nomenclature"),
+      [t("h-qte"), t("h-fichier"), t("h-config"), t("h-materiau"), ...noms],
+      [...par.values()].map(({ c, s, n }) => [String(n), c.fichier, c.configuration || "",
+        s.materiau, ...noms.map((k) => s.props.get(k) ?? "")]),
+      ["num"]);
+    tableau(t("f-composants"), [t("h-composant"), t("h-fichier"), t("h-config"), t("h-etat")],
+      d.composants.map((c) => [c.nom, c.fichier, c.configuration || "", etat(c)]),
+      ["", "", "", "doux"]);
+    // The mates, as the tree names them; the type when measured.
+    if ((d.contraintes || []).length) {
+      tableau(t("f-contraintes"), [t("h-nom"), t("h-type"), t("h-valeur"), t("h-composants")],
+        d.contraintes.map((c) => {
+          const lib = c.libelle || "";
+          const p = lib.indexOf(" (");
+          return [p > 0 ? lib.slice(0, p) : (lib || c.nom), t("m-" + c.type) || `type ${c.type}`,
+            c.valeur_m == null ? "" : `${+(c.valeur_m * 1000).toPrecision(12)} mm`,
+            p > 0 ? lib.slice(p + 2, -1).replace(/,/g, ", ") : ""];
+        }),
+        ["", "", "num", "doux"]);
+    }
+    // The CSV is the list as the file gives it, one component per line: a
+    // button next to the other downloads.
+    const champ = (x) => `"${String(x).replace(/"/g, '""')}"`;
+    const ligne = (xs) => xs.map(champ).join(";");
+    // Each line also carries what its part says about itself, one column
+    // per property name, in the order met.
     const csv = [ligne(["component", "file", "configuration", "state", "in_bom",
                         "material", ...noms])]
       .concat(d.composants.map((c, i) => ligne([c.nom, c.fichier, c.configuration || "",
