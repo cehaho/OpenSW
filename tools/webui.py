@@ -205,8 +205,11 @@ def lire_fiche(job: Job) -> None:
         f = fiche(open_container(job.source))
     except Exception:
         return
-    png = f.pop("apercu_png")
-    f["apercu"] = base64.b64encode(png).decode() if png else None
+    for cle, png in (("apercu", f.pop("apercu_png")),
+                     ("apercu_grand", f.pop("apercu_grand_png"))):
+        f[cle] = base64.b64encode(png).decode() if png else None
+    for fe in f["feuilles"]:
+        fe["png"] = base64.b64encode(fe["png"]).decode() if fe["png"] else None
     if job.composants is not None:
         f["composants"] = job.composants
         f["contraintes"] = job.contraintes or []
@@ -280,15 +283,29 @@ def voir(job: Job, data: bytes) -> None:
     say = job.journal.say
     try:
         dossier = job.dossier = Path(tempfile.mkdtemp(prefix="opensw-"))
-        source = job.source = dossier / job.name
-        source.write_bytes(data)
         say(f"{job.name} received, {_human(len(data))}", "ok")
+        assemblages = {}
+        if data[:4] == b"PK\x03\x04":
+            source, chemins = _deballer_plan(data, dossier, job.name)
+            from sldprt.assembly import read_assembly
+
+            for a in chemins:
+                try:
+                    assemblages[a.stem.lower()] = read_assembly(a)
+                except Exception as échec:
+                    say(f"{a.name} not read: {type(échec).__name__}: {échec}", "note")
+            say(f"zip: {source.name} and {len(assemblages)} assembly(ies) read, "
+                "which place the parts of shaded views", "detail")
+        else:
+            source = dossier / job.name
+            source.write_bytes(data)
+        job.source = source
         say(f"reader: {version()}", "detail")
         say("drawing: sldprt.drawing.read_drawing()", "step")
         début = time.monotonic()
         from sldprt.drawing import read_drawing, to_dxf
 
-        dessin = read_drawing(source)
+        dessin = read_drawing(source, assemblages or None)
         plan = plan_json(dessin)
         for f in plan["feuilles"]:
             vues = ", ".join(
@@ -421,6 +438,34 @@ def _fiches_pieces(asm, fichiers: dict[str, Path]) -> dict:
     return out
 
 
+def _plan_dans_zip(data: bytes) -> bool:
+    """A zip that holds a drawing: the drawing is what is looked at."""
+    if data[:4] != b"PK\x03\x04":
+        return False
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        return any(n.lower().endswith(".slddrw") for n in z.namelist())
+
+
+def _deballer_plan(data: bytes, dossier: Path, nom: str) -> tuple[Path, list[Path]]:
+    """A dropped zip: the drawing, and the assemblies its views show. The
+    drawing keeps each part's mesh, not where the assembly places it. Only
+    the name of each entry counts, never its path."""
+    plans, assemblages = [], []
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for info in z.infolist():
+            base = PurePosixPath(info.filename.replace("\\", "/")).name
+            if info.is_dir() or not base or base.startswith("~$"):
+                continue
+            if base.lower().endswith((".slddrw", ".sldasm")):
+                cible = dossier / base
+                cible.write_bytes(z.read(info))
+                (plans if base.lower().endswith(".slddrw") else assemblages).append(cible)
+    if not plans:
+        raise ValueError("the zip holds no .SLDDRW")
+    tete = next((p for p in plans if p.stem.lower() == Path(nom).stem.lower()), plans[0])
+    return tete, assemblages
+
+
 def voir_assemblage(job: Job, data: bytes) -> None:
     """Read an assembly and keep its 3D view in memory for the page.
 
@@ -431,6 +476,9 @@ def voir_assemblage(job: Job, data: bytes) -> None:
     """
     from sldprt.assembly import read_assembly, to_stl, to_view
 
+    if _plan_dans_zip(data):
+        voir(job, data)
+        return
     say = job.journal.say
     try:
         dossier = job.dossier = Path(tempfile.mkdtemp(prefix="opensw-"))
@@ -648,6 +696,17 @@ HTML = r"""<!doctype html>
                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* The file properties. */
   #fiche-carte { display: none; }
+  /* On a wide screen the properties sit right of the view instead of
+     below it; the whole page widens, every card keeps the same edges. */
+  @media (min-width: 1200px) {
+    main.avec-fiche { max-width: 1480px; }
+    main.avec-fiche #espace { display: grid; grid-template-columns: minmax(0, 1fr) 400px;
+                              column-gap: var(--s4); align-items: start; }
+    main.avec-fiche #vue-carte, main.avec-fiche #plan-carte,
+    main.avec-fiche #journal { grid-column: 1; }
+    main.avec-fiche #fiche-carte { grid-column: 2; grid-row: 1 / span 3;
+      position: sticky; top: var(--s4); max-height: calc(100vh - 2 * var(--s4)); overflow: auto; }
+  }
   .fiche-titre { display: flex; flex-wrap: wrap; gap: var(--s1) 10px; align-items: baseline;
                  margin-bottom: var(--s3); font-size: 12px; }
   #fiche-export { margin-left: auto; display: flex; gap: 6px; }
@@ -658,7 +717,16 @@ HTML = r"""<!doctype html>
   .fiche-titre small, #fiche-table small { color: var(--muted); font-size: 11px; }
   .fiche { display: flex; gap: var(--s4); flex-wrap: wrap; align-items: flex-start; }
   #fiche-apercu { max-width: 160px; width: 100%; border-radius: var(--radius);
-                  border: 1px solid var(--border); background: #fff; }
+                  border: 1px solid var(--border); background: #fff; cursor: zoom-in; }
+  /* The previews at their stored size, pixel for pixel. */
+  #apercus { max-width: calc(100vw - 32px); max-height: calc(100vh - 32px);
+             padding: var(--s4); border: 1px solid var(--border);
+             border-radius: var(--radius); background: var(--surface); color: var(--text); }
+  #apercus::backdrop { background: rgba(0, 0, 0, .5); }
+  #apercus figure { margin: 0 0 var(--s4); }
+  #apercus figcaption { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  #apercus img { display: block; max-width: none; background: #fff;
+                 border: 1px solid var(--border); }
   #fiche-table { flex: 1 1 360px; min-width: 0; font-size: 12px; }
   /* A section: collapsible, its lines as a table. */
   .fiche-kv { border-collapse: collapse; }
@@ -835,6 +903,7 @@ HTML = r"""<!doctype html>
         data-t-title="step-asm" title="Export to STEP: pick the assembly's parts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/></svg>.STEP</button><input id="pieces-asm" type="file" multiple accept=".SLDPRT,.sldprt" hidden><span id="lien"></span></div>
   </div>
 
+  <div id="espace">
   <div class="carte" id="vue-carte">
     <div class="vue-cadre">
       <canvas id="vue"></canvas>
@@ -883,6 +952,10 @@ HTML = r"""<!doctype html>
     <div class="fiche-titre"><b data-t="fiche">File properties</b>
       <small data-t="fiche-note">What the file says about itself, read as is: nothing is computed.</small><span id="fiche-export"></span></div>
     <div class="fiche"><img id="fiche-apercu" alt="" hidden><div id="fiche-table"></div></div>
+    <dialog id="apercus"><form method="dialog"><button data-t="fermer">Close</button></form>
+      <figure><figcaption id="apercu-png-legende"></figcaption><img id="apercu-png" alt=""></figure>
+      <figure id="apercu-dib-figure"><figcaption id="apercu-dib-legende"></figcaption><img id="apercu-dib" alt=""></figure>
+    </dialog>
   </div>
 
   <details class="carte" id="journal">
@@ -891,6 +964,7 @@ HTML = r"""<!doctype html>
               title="Copy the log"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></summary>
     <div id="log"><div class="vide" data-t="journal-vide">The log will appear here.</div></div>
   </details>
+  </div>
 
   <!-- AGPL-3.0, section 13: users interacting with the page over a network
        must be able to get its source code. -->
@@ -978,7 +1052,12 @@ const TEXTES = {
     "f-cotes": "Cotes",
     "f-contraintes": "Contraintes", "m-0": "coïncidente", "m-5": "distance",
     "f-csv": "Télécharger la liste des composants en CSV",
-    plusieurs: "Plusieurs fichiers : déposez un assemblage (.SLDASM) avec ses pièces.",
+    "apercu-agrandir": "Voir les aperçus à leur taille",
+    "apercu-png": "PreviewPNG, l'aperçu PNG",
+    "apercu-dib": "Preview, l'image Windows (256 couleurs)",
+    "feuille-sans-image": "SolidWorks n'a pas gardé d'image de cette feuille : aperçu du fichier",
+    fermer: "Fermer",
+    plusieurs: "Plusieurs fichiers : déposez un assemblage (.SLDASM) avec ses pièces, ou une mise en plan (.SLDDRW) avec ses assemblages.",
     corps: "corps",
     genres: { line: "segment", circle: "cercle", path: "arc", polygon: "polygone",
               polyline: "arête", text: "texte" },
@@ -1052,7 +1131,12 @@ const TEXTES = {
     "f-cotes": "Dimensions",
     "f-contraintes": "Mates", "m-0": "coincident", "m-5": "distance",
     "f-csv": "Download the component list as CSV",
-    plusieurs: "Several files: drop an assembly (.SLDASM) together with its parts.",
+    "apercu-agrandir": "Show the previews at their stored size",
+    "apercu-png": "PreviewPNG, the PNG preview",
+    "apercu-dib": "Preview, the Windows bitmap (256 colours)",
+    "feuille-sans-image": "SolidWorks kept no image of this sheet: file preview",
+    fermer: "Close",
+    plusieurs: "Several files: drop an assembly (.SLDASM) together with its parts, or a drawing (.SLDDRW) with its assemblies.",
     corps: "body",
     genres: { line: "segment", circle: "circle", path: "arc", polygon: "polygon",
               polyline: "edge", text: "text" },
@@ -1137,12 +1221,14 @@ $("fichier").addEventListener("change", async () => {
   if (!f) return;
   if ($("fichier").files.length > 1) {
     const tous = [...$("fichier").files];
-    const asm = tous.find((x) => /\.sldasm$/i.test(x.name));
-    if (!asm) {
+    // A drawing with its assemblies: they place the parts of its shaded views.
+    const tete = tous.find((x) => /\.slddrw$/i.test(x.name))
+              || tous.find((x) => /\.sldasm$/i.test(x.name));
+    if (!tete) {
       ligne({ ms: 0, kind: "err", text: t("plusieurs") });
       return;
     }
-    f = await zipper(tous, asm.name.replace(/\.[^.]*$/, "") + ".zip");
+    f = await zipper(tous, tete.name.replace(/\.[^.]*$/, "") + ".zip");
     const dt = new DataTransfer();
     dt.items.add(f);
     $("fichier").files = dt.files;
@@ -1255,6 +1341,7 @@ async function exporter(route) {
     $("vue-carte").style.display = "none";
     $("plan-carte").style.display = "none";
     $("fiche-carte").style.display = "none";
+    document.querySelector("main").classList.remove("avec-fiche");
   }
   log.innerHTML = ""; vide = true;
   const début = performance.now();
@@ -1515,7 +1602,8 @@ function fiche(d) {
     return a;
   };
   const cases = (xs) => xs.map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`).join(";");
-  const { apercu, ...lu } = d;
+  const { apercu, apercu_grand, feuilles, ...lu } = d;
+  lu.feuilles = (feuilles || []).map((f) => f.nom);
   $("fiche-export").replaceChildren(
     lien("csv", t("f-export-csv"),
       "\ufeff" + [cases(["section", "item", "field", "value", "note"])].concat(sortie.map(cases)).join("\r\n") + "\r\n",
@@ -1524,8 +1612,24 @@ function fiche(d) {
       "application/json", `${base}-properties.json`));
   const img = $("fiche-apercu");
   img.hidden = !d.apercu;
+  img.title = t("apercu-agrandir");
   if (d.apercu) img.src = "data:image/png;base64," + d.apercu;
+  // A click: the previews the file keeps, at their size.
+  const légende = (id, cle) => (e) =>
+    ($(id).textContent = `${t(cle)} — ${e.target.naturalWidth} × ${e.target.naturalHeight}`);
+  $("apercu-png").onload = (e) => ($("apercu-png-legende").textContent =
+    `${FICHE.legende} — ${e.target.naturalWidth} × ${e.target.naturalHeight}`);
+  $("apercu-dib").onload = légende("apercu-dib-legende", "apercu-dib");
+  $("apercu-dib-figure").hidden = !d.apercu_grand;
+  $("apercu-dib").src = d.apercu_grand ? "data:image/png;base64," + d.apercu_grand : "";
+  img.onclick = () => $("apercus").showModal();
+  // A drawing's preview follows the sheet shown: SolidWorks keeps an
+  // image of each.
+  FICHE.apercu = d.apercu;
+  FICHE.feuilles = feuilles || [];
+  apercuFeuille();
   $("fiche-carte").style.display = "block";
+  document.querySelector("main").classList.add("avec-fiche");
 }
 
 // ---------------------------------------------------------------- 3D view
@@ -2090,6 +2194,22 @@ $("vue-cherche").addEventListener("keydown", (e) => { if (e.key === "Enter") tro
 
 const P = { feuilles: [], rang: 0, vb: null, plein: null, sel: null };
 
+// The properties preview: the file's, or the image of the sheet shown.
+const FICHE = { apercu: null, feuilles: [], legende: "" };
+function apercuFeuille() {
+  const nom = P.feuilles[P.rang] && $("plan-carte").style.display === "block"
+    ? P.feuilles[P.rang].nom : null;
+  const f = FICHE.feuilles.find((x) => x.nom === nom);
+  const png = (f && f.png) || FICHE.apercu;
+  const img = $("fiche-apercu");
+  img.hidden = !png;
+  if (png) img.src = "data:image/png;base64," + png;
+  img.title = f && !f.png ? t("feuille-sans-image") : t("apercu-agrandir");
+  FICHE.legende = f && f.png ? `Images/Sheet_${FICHE.feuilles.indexOf(f)} — ${f.nom}`
+    : t("apercu-png");
+  $("apercu-png").src = png ? "data:image/png;base64," + png : "";
+}
+
 function planche(plan) {
   P.feuilles = plan.feuilles;
   $("plan-carte").style.display = "block";
@@ -2107,6 +2227,7 @@ function planche(plan) {
 
 function feuille(i) {
   P.rang = i;
+  apercuFeuille();
   [...$("plan-onglets").children].forEach((b, j) => b.classList.toggle("choisi", i === j));
   $("plan").innerHTML = P.feuilles[i].svg;
   const svg = $("plan").querySelector("svg");
