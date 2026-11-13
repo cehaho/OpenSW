@@ -19,7 +19,7 @@ It is a file reader for interoperability, not a CAD kernel or an API.
 | | properties: summary, custom and per-configuration properties, configuration names, material and density, preview image | geometry of configurations that were not saved with their geometry (the page says which ones were) |
 | | mass, volume, area, centre of mass and inertia at the centre of mass, **when SolidWorks stored them** (it does when a property links to them) | mass properties SolidWorks did not store |
 | **Assembly** | components and a bill of materials by part file (→ CSV), placements, hidden, suppressed and excluded-from-BOM states, the configuration each instance shows, with its part files each part's properties and material in the CSV, mates (name, type, the components they link, a distance's value), the display mesh (→ STL); with its part files, an exact STEP assembly | angle mate values and the faces mates hold; configurations; the exact geometry, which is in the parts |
-| **Drawing** | sheets, lines, arcs, texts (fonts, colours), tables, model view edges, dimensions and their tolerances as drawn (→ SVG, DXF); linked texts (`$PRP:"…"`) with the value they show; dimension values as numbers (lengths, radii, diameters, angles) and length tolerances | the edges a dimension measures; whether a radial dimension is R or Ø other than in its text; angle tolerances; hatches, images, centre marks, the sheet format |
+| **Drawing** | sheets, lines (with their line types), arcs, texts (fonts, colours), tables, images, model view edges (projected, detail, broken, cropped, hidden-lines-removed views), shaded views from the display mesh SolidWorks stores, dimensions and their tolerances as drawn (→ SVG, DXF); linked texts (`$PRP:"…"`) with the value they show; dimension values as numbers (lengths, radii, diameters, angles) and length tolerances; the image SolidWorks keeps of each sheet | the edges a dimension measures; whether a radial dimension is R or Ø other than in its text; angle tolerances; hatches, centre marks, the sheet format; where an assembly places its parts (it is in the assembly file) |
 
 What is not read is counted in the log rather than hidden.
 
@@ -126,8 +126,11 @@ open("plan.dxf", "w", encoding="cp1252").write(to_dxf(drawing.active))
 ```
 
 Drawings from older SolidWorks versions are read too, dimensions included.
-Not shown yet: centre marks, images, and the edges of projected views that
-store no rotation of their own.
+A shaded view is painted with the display mesh the drawing stores for each
+part. For an assembly view, the drawing does not say where the assembly
+places its parts: drop the drawing together with its assembly files
+(several files at once, or a zip) and the view is shaded; alone, it shows
+its edges. Not shown yet: centre marks and hatches.
 
 ## File properties
 

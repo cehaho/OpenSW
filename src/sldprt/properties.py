@@ -28,12 +28,19 @@ property more, checked against what the SolidWorks API reads back):
     its physical properties as the part keeps them.
 ``PreviewPNG``
     The preview image, a plain PNG.
+``Preview``
+    The legacy preview, a Windows 256-colour bitmap (DIB) behind a 4-byte
+    length, larger than ``PreviewPNG``; shown as a PNG, pixel for pixel.
+``SheetPreviews/SheetNames`` and ``Images/Sheet_<n>``
+    In a drawing: each sheet's name, in order, and the PNG SolidWorks keeps
+    of it, at the same rank. A sheet never displayed has no image.
 """
 
 from __future__ import annotations
 
 import re
 import struct
+import zlib
 from itertools import pairwise
 from xml.etree import ElementTree
 
@@ -268,6 +275,112 @@ def dimensions_in(data: bytes) -> dict:
     return out
 
 
+def _dib_png(data: bytes) -> bytes | None:
+    """The legacy ``Preview`` stream as a PNG, pixel for pixel, or ``None``.
+
+    A u32 length, a 40-byte BITMAPINFOHEADER, the palette, the pixels. 8-bit
+    DIBs only, RLE8 or uncompressed: the palette becomes the PNG's own
+    (colour type 3), so no colour is converted. Rows are bottom-up when the
+    height is positive; pixels an RLE8 delta or early end of line skips keep
+    index 0, as Windows draws them.
+    """
+    if len(data) < 44 or struct.unpack_from("<I", data, 4)[0] != 40:
+        return None
+    w, height = struct.unpack_from("<ii", data, 8)
+    bits = struct.unpack_from("<H", data, 18)[0]
+    compression = struct.unpack_from("<I", data, 20)[0]
+    h = abs(height)
+    if bits != 8 or compression not in (0, 1) or not (0 < w <= 20_000 and 0 < h <= 20_000):
+        return None
+    colours = struct.unpack_from("<I", data, 36)[0] or 256
+    start = 44 + 4 * colours
+    if colours > 256 or start > len(data):
+        return None
+    palette = b"".join(data[44 + 4 * k : 47 + 4 * k][::-1] for k in range(colours))
+    pixels = data[start:]
+    rows = [bytearray(w) for _ in range(h)]
+    if compression == 0:
+        step = (w + 3) & ~3
+        if len(pixels) < step * h:
+            return None
+        for y in range(h):
+            rows[y][:] = pixels[y * step : y * step + w]
+    else:
+        x = y = i = 0
+        n = len(pixels)
+        while i + 1 < n:
+            count, value = pixels[i], pixels[i + 1]
+            i += 2
+            if count:
+                end = min(x + count, w)
+                if y < h and end > x:
+                    rows[y][x:end] = bytes([value]) * (end - x)
+                x += count
+            elif value == 0:
+                x, y = 0, y + 1
+            elif value == 1:
+                break
+            elif value == 2:
+                if i + 1 >= n:
+                    return None
+                x, y = x + pixels[i], y + pixels[i + 1]
+                i += 2
+            else:
+                run = pixels[i : i + value]
+                if len(run) < value:
+                    return None
+                end = min(x + value, w)
+                if y < h and end > x:
+                    rows[y][x:end] = run[: end - x]
+                x += value
+                i += value + (value & 1)
+        else:
+            return None
+    if height > 0:
+        rows.reverse()
+
+    def chunk(kind: bytes, body: bytes) -> bytes:
+        return (struct.pack(">I", len(body)) + kind + body
+                + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF))
+
+    raw = b"".join(b"\0" + bytes(row) for row in rows)
+    return (PNG_SIGNATURE
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 3, 0, 0, 0))
+            + chunk(b"PLTE", palette)
+            + chunk(b"IDAT", zlib.compress(raw, 6))
+            + chunk(b"IEND", b""))
+
+
+#: The mark of an MFC UTF-16 string, followed by its length on one byte.
+_UTF16 = b"\xff\xfe\xff"
+
+
+def sheets(container: Container) -> list[dict]:
+    """``[{"nom", "png"}]``: a drawing's sheets and the image SolidWorks
+    keeps of each, ``None`` when it has none.
+
+    ``SheetPreviews/SheetNames``: a u16, the number of sheets, then their
+    names as MFC strings (``ff fe ff``, length, UTF-16). The image of the
+    sheet of rank ``n`` is ``Images/Sheet_<n>``.
+    """
+    stream = container.get("SheetPreviews/SheetNames")
+    if stream is None or len(stream.data) < 2:
+        return []
+    d = stream.data
+    out = []
+    at = 2
+    for n in range(struct.unpack_from("<H", d, 0)[0]):
+        if d[at : at + 3] != _UTF16 or at + 4 > len(d):
+            break
+        end = at + 4 + 2 * d[at + 3]
+        name = d[at + 4 : end].decode("utf-16-le", "replace")
+        image = container.get(f"Images/Sheet_{n}")
+        png = image.data if image is not None and image.data[:8] == PNG_SIGNATURE else None
+        out.append({"nom": name, "png": png})
+        at = end
+    return out
+
+
 def read_properties(container: Container) -> dict:
     """Everything the document says about itself, read, never computed."""
     info = _information(container)
@@ -293,6 +406,7 @@ def read_properties(container: Container) -> dict:
         c["materiau"] = materials.get(c["nom"])
     preview = container.get("PreviewPNG")
     png = bytes(preview.data) if preview is not None else b""
+    legacy = container.get("Preview")
     return {
         "resume": {key: info.get(name, "") for key, name in RESUME.items()},
         **_dates(container),
@@ -301,4 +415,6 @@ def read_properties(container: Container) -> dict:
         "cotes": dimensions(container)["cotes"],
         "liens": linked_texts(container),
         "apercu_png": png if png.startswith(PNG_SIGNATURE) else None,
+        "apercu_grand_png": _dib_png(bytes(legacy.data)) if legacy is not None else None,
+        "feuilles": sheets(container),
     }
