@@ -142,6 +142,9 @@ properties, its material and density, and whether its geometry was saved.
 Mass, volume, centre of mass and inertia appear only when SolidWorks wrote them, which
 it does when a custom property links to them. Each value was checked against
 what the SolidWorks API reads back, on parts made for that purpose.
+The previews the file keeps are shown too, at their stored size on a click:
+the PNG preview and the larger Windows bitmap. A drawing keeps an image of
+each sheet it has displayed; the preview follows the sheet shown.
 
 ```python
 from sldprt import open_container
