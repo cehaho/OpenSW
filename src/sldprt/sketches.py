@@ -1,6 +1,6 @@
 """Sketch geometry read in the tree stream: segments and plane.
 
-Saves older than v12000 are not read: their layout differs.
+Saves older than v11000 are not read: their layout differs.
 
 **A sketch is made of raw arrays**, not MFC objects. Each record starts with
 its id (``u32``) then a fixed header ::
@@ -45,8 +45,15 @@ from .container import Container
 from .features import _payload, carchive_strings, document_version, read_keywords, tree_stream
 from .nodes import _regions, named_objects
 
-#: Below this version, sketches are not read.
-SKETCHES_SINCE = 12000
+#: Below this version, sketches are not read. It was 12000 until
+#: 2026-11-22: the page's NIST example part (``nist_ftc_08_asme1_rc_sw1802``,
+#: ``_MO_VERSION_11000``) gave no sketch. Read at 11000, against the tree
+#: SolidWorks 2026 returns: 26 sketches, 20 right by segment type, the ends
+#: of the 13 comparable ones identical; the 6 others are hole sketches, where
+#: the API returns 5 lines and the reading 2. No extra segment. Clasps saved
+#: v3800 to v10000 give nothing either way. What would refute it: a v11000
+#: part where the reading invents segments.
+SKETCHES_SINCE = 11000
 
 _MINUS_ONE = b"\x00\x00\x80\xbf"
 _POINT = b"\x1e\x00"
