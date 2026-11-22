@@ -16,6 +16,7 @@
     if (!j) return;
     if (m.ligne) j.lignes.push(m.ligne);
     if (m.fichier) { j.fichier = m.fichier; j.resultat = m.resultat; }
+    if (m.esqFichier) { j.esqFichier = m.esqFichier; j.esqResultat = m.esqResultat; }
     if (m.vue) j.vue = m.vue;
     if (m.plan) j.plan = m.plan;
     if (m.fiche) j.fiche = m.fiche;
@@ -52,6 +53,7 @@
     if (u.pathname.endsWith("/journal")) {
       const depuis = Number(u.searchParams.get("depuis") || 0);
       return json({ lignes: j.lignes.slice(depuis), fini: j.fini, fichier: j.fichier,
+                    esquisses_step: j.esqFichier || null,
                     vue: j.vue !== null, plan: j.plan !== null,
                     fiche: j.fiche !== null });
     }
@@ -65,12 +67,15 @@
   document.addEventListener("click", (e) => {
     const a = e.target.closest && e.target.closest("a.telecharger");
     if (!a) return;
-    const j = travaux.get(a.dataset.job);
-    if (!j || !j.resultat) return;
+    // The sketch STEP link carries data-job-esq, the file link data-job.
+    const esq = a.dataset.jobEsq !== undefined;
+    const j = travaux.get(esq ? a.dataset.jobEsq : a.dataset.job);
+    const octets = j && (esq ? j.esqResultat : j.resultat);
+    if (!octets) return;
     e.preventDefault();
     const lien = document.createElement("a");
-    lien.href = URL.createObjectURL(new Blob([j.resultat], { type: "application/octet-stream" }));
-    lien.download = j.fichier;
+    lien.href = URL.createObjectURL(new Blob([octets], { type: "application/octet-stream" }));
+    lien.download = esq ? j.esqFichier : j.fichier;
     document.body.append(lien);
     lien.click();
     lien.remove();

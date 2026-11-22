@@ -577,7 +577,7 @@ def préparer_vue(job: Job) -> None:
 def lire_esquisses(job: Job) -> list[dict] | None:
     """The uploaded part's sketches, placed in the model, as strokes
     (:func:`sldprt.sketch_view.strokes`), read in this process, under
-    Pyodide too. With OpenCASCADE, the STEP of the sketches alone is written
+    Pyodide too. The STEP of the sketches alone, in pure Python, is written
     from the same reading, next to the part's, and offered for download.
     Returns ``None``, after saying so in the log, when there is nothing to
     show: a reading error does not break the view."""
@@ -598,12 +598,8 @@ def lire_esquisses(job: Job) -> list[dict] | None:
         return None
     say(f"sketches: {len(liste)} in the view ({sum(e['3d'] for e in liste)} in 3D), "
         f"in {time.monotonic() - début:.1f} s", "ok")
-    # SolidWorks opens the STEP of the sketches as 3D sketches. Without
-    # OpenCASCADE (the published page), no STEP.
-    try:
-        import OCP  # noqa: F401
-    except ImportError:
-        return liste
+    # SolidWorks opens the STEP of the sketches as 3D sketches; the
+    # published page writes it too.
     esq = job.result.with_name(job.result.stem + ".sketches.step")
     try:
         sketch_view.write_step(lecture, esq, f"{job.source.stem} — sketches")
