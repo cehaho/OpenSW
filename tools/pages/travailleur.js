@@ -68,8 +68,39 @@ function rang(c) {
   return -1;
 }
 
-// The labelled STEP, meshed: the same JSON as tools/vue3d.py returns.
-async function mailler(octets, table, dire) {
+// Float32 as base64, in slices: String.fromCharCode cannot take a large array.
+function base64(flottants) {
+  const octets = new Uint8Array(flottants.buffer);
+  let binaire = "";
+  for (let i = 0; i < octets.length; i += 0x8000)
+    binaire += String.fromCharCode.apply(null, octets.subarray(i, i + 0x8000));
+  return btoa(binaire);
+}
+
+// vue.esquisses, as webui.esquisses_en_vue writes it on the server: the
+// strokes of navigateur.lancer (mm, in the model) relative to the mesh
+// centre, as float32.
+function esquissesEnVue(liste, centre) {
+  let n = 0;
+  for (const e of liste) n += e.trait.length + e.construction.length;
+  const f = new Float32Array(n);
+  const fiches = [];
+  let k = 0;
+  for (const e of liste) {
+    const fiche = { nom: e.nom, "3d": e["3d"], fonction: e.fonction ?? null };
+    for (const clé of ["trait", "construction"]) {
+      const pts = e[clé];
+      fiche[clé] = [k / 3, pts.length / 3];
+      for (let i = 0; i < pts.length; i++) f[k++] = pts[i] - centre[i % 3];
+    }
+    fiches.push(fiche);
+  }
+  return { liste: fiches, sommets: base64(f) };
+}
+
+// The labelled STEP, meshed: the same JSON as tools/vue3d.py returns,
+// sketches included when navigateur.lancer read some.
+async function mailler(octets, table, dire, esquisses) {
   const t0 = performance.now();
   const o = await chargerOcct();
   const res = o.ReadStepFile(octets, {
@@ -111,16 +142,13 @@ async function mailler(octets, table, dire) {
       faces.push(face);
     }
   });
-  // base64 in slices: String.fromCharCode cannot take a large array.
-  const octetsSommets = new Uint8Array(sommets.buffer);
-  let binaire = "";
-  for (let i = 0; i < octetsSommets.length; i += 0x8000)
-    binaire += String.fromCharCode.apply(null, octetsSommets.subarray(i, i + 0x8000));
   const diagonale = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]) || 1;
   dire(`3D view: ${faces.length} faces, ${corpsMax} bodies, in ` +
        `${((performance.now() - t0) / 1000).toFixed(1)} s`, "ok");
   if (inconnues) dire(`${inconnues} unnamed faces: their colour designates no face`, "note");
-  return JSON.stringify({ faces, corps: corpsMax, rayon: diagonale / 2, sommets: btoa(binaire) });
+  const vue = { faces, corps: corpsMax, rayon: diagonale / 2, centre, sommets: base64(sommets) };
+  if (esquisses && esquisses.length) vue.esquisses = esquissesEnVue(esquisses, centre);
+  return JSON.stringify(vue);
 }
 
 onmessage = async (e) => {
@@ -151,7 +179,8 @@ onmessage = async (e) => {
     if (r.etiquete) {
       try {
         dire("3D view: loading OpenCASCADE (WebAssembly)", "step");
-        const vue = await mailler(new Uint8Array(r.etiquete), JSON.parse(r.faces), dire);
+        const vue = await mailler(new Uint8Array(r.etiquete), JSON.parse(r.faces), dire,
+                                  r.esquisses ? JSON.parse(r.esquisses) : null);
         postMessage({ id, vue });
       } catch (échec) {
         dire(`3D view failed: ${échec.message || échec}`, "note");

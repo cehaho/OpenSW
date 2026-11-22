@@ -129,6 +129,10 @@ def _vue_navigateur(job: webui.Job) -> None:
         return
     job.journal.say("3D view: meshing in the browser (OpenCASCADE in WebAssembly)",
                     "step")
+    # The sketches, read here as on the server; without OpenCASCADE, no
+    # sketch STEP. Their vertices stay in the model frame: the worker moves
+    # them to its mesh centre (``esquissesEnVue`` in tools/pages/travailleur.js).
+    job.esquisses = webui.lire_esquisses(job)
 
 
 #: What the server says and the browser does not do.
@@ -140,7 +144,9 @@ def lancer(route: str, nom: str, data: bytes, dire: Callable[[str], None],
     """A page job, run as ``webui`` runs it, journal included.
 
     *dire* receives each journal line as JSON, as it comes. Returns
-    ``{"fichier", "resultat", "vue", "plan", "etiquete", "faces"}``.
+    ``{"fichier", "resultat", "vue", "plan", "etiquete", "faces", "fiche",
+    "esquisses"}``; for a part, ``esquisses`` holds its sketches as strokes
+    (:func:`sldprt.sketch_view.strokes`, mm in the model).
     """
     if hasattr(data, "to_bytes"):  # a Uint8Array from JavaScript
         data = data.to_bytes()
@@ -158,6 +164,7 @@ def lancer(route: str, nom: str, data: bytes, dire: Callable[[str], None],
 def _lancer(route, nom, data, dire) -> dict:
     job = webui.Job(webui.safe_name(nom), route)
     job.etiquete = None
+    job.esquisses = None
     dit = job.journal.say
 
     def say(text: str, kind: str = "detail") -> None:
@@ -174,7 +181,7 @@ def _lancer(route, nom, data, dire) -> dict:
     (cible or webui.run)(job, data)
 
     sortie = {"fichier": "", "resultat": None, "vue": None, "plan": None,
-              "etiquete": None, "faces": None, "fiche": None}
+              "etiquete": None, "faces": None, "fiche": None, "esquisses": None}
     if job.result is not None and job.result.exists():
         sortie["fichier"] = job.result.name
         sortie["resultat"] = job.result.read_bytes()
@@ -187,6 +194,8 @@ def _lancer(route, nom, data, dire) -> dict:
     if job.etiquete is not None:
         sortie["etiquete"], faces = job.etiquete
         sortie["faces"] = json.dumps(faces)
+    if job.esquisses:
+        sortie["esquisses"] = json.dumps(job.esquisses)
     if job.dossier is not None:
         shutil.rmtree(job.dossier, ignore_errors=True)
     return sortie
