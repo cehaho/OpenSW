@@ -129,6 +129,8 @@ class Job:
         self.source: Path | None = None
         self.fini_a: float | None = None
         self.vue: bytes | None = None
+        #: The STEP of the sketches alone, written with a part's view.
+        self.esquisses_step: Path | None = None
         self.plan: bytes | None = None
         self.fiche: bytes | None = None
         self.composants: list | None = None
@@ -568,7 +570,82 @@ def préparer_vue(job: Job) -> None:
     vides = sum(f["triangles"] == 0 for f in faces)
     if vides:
         say(f"{vides} faces OpenCASCADE cannot mesh, not shown", "note")
+    _esquisses_dans_la_vue(job, vue)
     job.vue = json.dumps(vue).encode()
+
+
+def lire_esquisses(job: Job) -> list[dict] | None:
+    """The uploaded part's sketches, placed in the model, as strokes
+    (:func:`sldprt.sketch_view.strokes`), read in this process, under
+    Pyodide too. With OpenCASCADE, the STEP of the sketches alone is written
+    from the same reading, next to the part's, and offered for download.
+    Returns ``None``, after saying so in the log, when there is nothing to
+    show: a reading error does not break the view."""
+    say = job.journal.say
+    if job.source is None or job.source.suffix.lower() != ".sldprt":
+        return None
+    début = time.monotonic()
+    try:
+        from sldprt import sketch_view
+
+        lecture = sketch_view.read(job.source)
+        liste = sketch_view.strokes(lecture)
+    except Exception as échec:
+        say(f"sketches not read: {type(échec).__name__}: {échec}", "note")
+        return None
+    if not liste:
+        say("sketches: none read in this part", "note")
+        return None
+    say(f"sketches: {len(liste)} in the view ({sum(e['3d'] for e in liste)} in 3D), "
+        f"in {time.monotonic() - début:.1f} s", "ok")
+    # SolidWorks opens the STEP of the sketches as 3D sketches. Without
+    # OpenCASCADE (the published page), no STEP.
+    try:
+        import OCP  # noqa: F401
+    except ImportError:
+        return liste
+    esq = job.result.with_name(job.result.stem + ".sketches.step")
+    try:
+        sketch_view.write_step(lecture, esq, f"{job.source.stem} — sketches")
+    except Exception as échec:
+        say(f"{esq.name} not written: {type(échec).__name__}: {échec}", "note")
+        return liste
+    if esq.exists():
+        job.esquisses_step = esq
+        say(f"{esq.name} ready to download: sketches only, no solid, "
+            f"{_human(esq.stat().st_size)}", "ok")
+    return liste
+
+
+def esquisses_en_vue(liste: list[dict], centre) -> dict:
+    """``vue["esquisses"]``: the sketch table (``trait`` and
+    ``construction`` as ``[first, count]`` vertices) and the vertices as
+    little-endian ``float32``, base64, relative to ``centre`` like the
+    faces'."""
+    import base64
+    from array import array
+
+    flottants, fiches = array("f"), []
+    for e in liste:
+        fiche = {"nom": e["nom"], "3d": e["3d"], "fonction": e.get("fonction")}
+        for clé in ("trait", "construction"):
+            pts = e[clé]
+            fiche[clé] = [len(flottants) // 3, len(pts) // 3]
+            flottants.extend(v - centre[i % 3] for i, v in enumerate(pts))
+        fiches.append(fiche)
+    if sys.byteorder != "little":
+        flottants.byteswap()
+    return {"liste": fiches, "sommets": base64.b64encode(flottants.tobytes()).decode("ascii")}
+
+
+def _esquisses_dans_la_vue(job: Job, vue: dict) -> None:
+    """Add the part's sketches to the view as strokes (:func:`lire_esquisses`).
+    If they are not read, the view goes without them."""
+    if "centre" not in vue:
+        return
+    liste = lire_esquisses(job)
+    if liste:
+        vue["esquisses"] = esquisses_en_vue(liste, vue["centre"])
 
 
 HTML = r"""<!doctype html>
@@ -662,7 +739,13 @@ HTML = r"""<!doctype html>
   button:disabled { opacity: .45; cursor: not-allowed; }
   /* Export and download side by side, an icon and a word. */
   #actions { display: flex; gap: var(--s2); margin-top: var(--s3); flex-wrap: wrap; }
-  #lien { display: contents; }
+  #lien, #lien-esq { display: contents; }
+  /* A group of outputs, its title first: "3D", then "Sketch" after a rule. */
+  .groupe { display: inline-flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+  .groupe-titre { color: var(--muted); font-size: 12px; font-weight: 600; }
+  .groupe-titre::after { content: " :"; }
+  #groupe-esq { margin-left: var(--s3); padding-left: var(--s4);
+                border-left: 1px solid var(--border); }
   .action {
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
     flex: 0 0 auto; height: 32px; padding: 0 14px; border-radius: var(--radius);
@@ -820,6 +903,47 @@ HTML = r"""<!doctype html>
   }
   .vue-barre input:focus { border-color: var(--accent); outline: none;
                            box-shadow: 0 0 0 2px var(--focus-ring); }
+  /* A switch: the checkbox stays for the keyboard and screen readers,
+     invisible; the track and its knob show it. */
+  .interrupteur { display: inline-flex; align-items: center; gap: var(--s2);
+                  cursor: pointer; user-select: none; color: var(--text); }
+  .interrupteur input { position: absolute; opacity: 0; width: 1px; height: 1px;
+                        margin: 0; padding: 0; border: 0; box-shadow: none; }
+  .interrupteur .piste {
+    position: relative; flex: 0 0 auto; width: 30px; height: 18px;
+    border-radius: var(--radius-full); background: var(--control);
+    border: 1px solid var(--border); box-shadow: inset 0 1px 2px rgba(0,0,0,.08);
+    transition: background .15s, border-color .15s;
+  }
+  .interrupteur .piste::after {
+    content: ""; position: absolute; top: 1px; left: 1px; width: 14px; height: 14px;
+    border-radius: 50%; background: var(--surface);
+    box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s;
+  }
+  .interrupteur:hover .piste { border-color: var(--muted); }
+  .interrupteur input:checked + .piste::after { transform: translateX(12px); background: #fff; }
+  .interrupteur input:focus-visible + .piste { box-shadow: 0 0 0 2px var(--focus-ring); }
+  .interrupteur input:disabled + .piste { opacity: .45; }
+  /* On the view, left of the full-page button, at its height, with the
+     buttons' « secondary » recipe. */
+  #vue-esq-bascule {
+    position: absolute; top: 8px; right: 40px; z-index: 2; height: 26px;
+    padding: 0 8px; border-radius: var(--radius); font-weight: 500;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--raised) 92%, #fff),
+                                        color-mix(in srgb, var(--raised) 96%, #000));
+    border: 1px solid color-mix(in srgb, var(--muted) 45%, transparent);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 1px 1px rgba(0,0,0,.12);
+    transition: filter .12s;
+  }
+  #vue-esq-bascule:hover { filter: brightness(1.04); }
+  #vue-esq-bascule:active { box-shadow: inset 0 1px 3px rgba(0,0,0,.22); }
+  /* On: the « primary » recipe, the downloads'. */
+  .interrupteur input:checked + .piste {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 90%, #fff) 0%,
+                var(--accent) 55%, color-mix(in srgb, var(--accent) 92%, #000) 100%);
+    border-color: color-mix(in srgb, var(--accent) 70%, #000);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.28);
+  }
   #plan-carte { display: none; }
   .onglets { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: var(--s3); }
   .onglets button { flex: 0 0 auto; height: 26px; padding: 0 10px; font-size: 12px; }
@@ -898,9 +1022,9 @@ HTML = r"""<!doctype html>
     </div>
     <!-- A chosen file opens by itself (STEP, drawing or assembly); only the
          .x_t export, which has no view, keeps a button. -->
-    <div id="actions"><button id="btn-parasolid" class="action" hidden disabled
+    <div id="actions"><span class="groupe" id="groupe-3d"><span class="groupe-titre" hidden>3D</span><button id="btn-parasolid" class="action" hidden disabled
         data-t-title="exporter-xt" title="Also export to Parasolid"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/></svg>.x_t</button><button id="btn-step-asm" class="action" hidden
-        data-t-title="step-asm" title="Export to STEP: pick the assembly's parts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/></svg>.STEP</button><input id="pieces-asm" type="file" multiple accept=".SLDPRT,.sldprt" hidden><span id="lien"></span></div>
+        data-t-title="step-asm" title="Export to STEP: pick the assembly's parts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/></svg>.STEP</button><input id="pieces-asm" type="file" multiple accept=".SLDPRT,.sldprt" hidden><span id="lien"></span></span><span class="groupe" id="groupe-esq" hidden><span class="groupe-titre" data-t="groupe-esq">Sketch</span><span id="lien-esq"></span></span></div>
   </div>
 
   <div id="espace">
@@ -908,6 +1032,8 @@ HTML = r"""<!doctype html>
     <div class="vue-cadre">
       <canvas id="vue"></canvas>
       <canvas id="vue-triedre"></canvas>
+      <label class="interrupteur" id="vue-esq-bascule" hidden><input type="checkbox" role="switch"
+        id="vue-esq"><span class="piste" aria-hidden="true"></span><span data-t="esquisses">Sketches</span></label>
       <button class="icone plein" data-cible="vue-carte" data-t-title="plein-écran"
               title="Full page (Esc to go back)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
     </div>
@@ -993,9 +1119,12 @@ const TEXTES = {
       "dans votre navigateur.",
     "exporter-xt": "Exporter aussi en Parasolid",
     télécharger: (n) => `Télécharger ${n}`,
+    "télécharger-esq": (n) => `Télécharger ${n} — uniquement les esquisses, sans le solide`,
     "vue-face": "Face", "vue-arrière": "Arrière", "vue-gauche": "Gauche",
     "vue-droite": "Droite", "vue-dessus": "Dessus", "vue-dessous": "Dessous",
     "vue-iso": "Isométrique", "zoom-mieux": "Zoom au mieux",
+    esquisses: "Esquisses", "groupe-esq": "Esquisse",
+    "esq-info": (n, f) => f ? `${n} — ${f}` : `${n} (esquisse libre)`,
     "aide-vue": "Clic : choisir une face et lire son nom. Bouton du milieu : " +
       "tourner · Ctrl+milieu : déplacer · Maj+milieu ou molette : zoomer · " +
       "Alt+milieu : pivoter · double clic milieu ou F : zoom au mieux · " +
@@ -1072,9 +1201,12 @@ const TEXTES = {
       "in your browser.",
     "exporter-xt": "Also export to Parasolid",
     télécharger: (n) => `Download ${n}`,
+    "télécharger-esq": (n) => `Download ${n} — sketches only, no solid`,
     "vue-face": "Front", "vue-arrière": "Back", "vue-gauche": "Left",
     "vue-droite": "Right", "vue-dessus": "Top", "vue-dessous": "Bottom",
     "vue-iso": "Isometric", "zoom-mieux": "Zoom to fit",
+    esquisses: "Sketches", "groupe-esq": "Sketch",
+    "esq-info": (n, f) => f ? `${n} — ${f}` : `${n} (free sketch)`,
     "aide-vue": "Click: select a face and read its name. Middle button: rotate · " +
       "Ctrl+middle: pan · Shift+middle or wheel: zoom · Alt+middle: roll · " +
       "middle double-click or F: zoom to fit · arrows: 15°, Shift: 90°.",
@@ -1208,6 +1340,16 @@ function actifs(oui) {
   $("btn-parasolid").disabled = !prêt || plan || asm;
   $("btn-step-asm").hidden = !asm;
   $("btn-step-asm").disabled = !prêt;
+  grouper();
+}
+
+// The "3D" title shows when the group holds a 3D output; the "Sketch" group
+// when it holds a link.
+function grouper() {
+  const g = $("groupe-3d");
+  g.querySelector(".groupe-titre").hidden =
+    !g.querySelector("#btn-parasolid:not([hidden]), #btn-step-asm:not([hidden]), a.sortie-3d");
+  $("groupe-esq").hidden = !$("lien-esq").children.length;
 }
 
 // A chosen file opens at once: a part goes through STEP (the view reads the
@@ -1217,6 +1359,8 @@ function actifs(oui) {
 $("fichier").addEventListener("change", async () => {
   actifs(true);
   $("lien").innerHTML = "";
+  $("lien-esq").innerHTML = "";
+  grouper();
   let f = $("fichier").files[0];
   if (!f) return;
   if ($("fichier").files.length > 1) {
@@ -1338,6 +1482,8 @@ async function exporter(route) {
   const enPlus = route === "parasolid";
   if (!enPlus) {
     $("lien").innerHTML = "";
+    $("lien-esq").innerHTML = "";
+    grouper();
     $("vue-carte").style.display = "none";
     $("plan-carte").style.display = "none";
     $("fiche-carte").style.display = "none";
@@ -1366,7 +1512,20 @@ async function exporter(route) {
         a.title = t("télécharger", état.fichier);
         a.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>`;
         a.append(état.fichier.split(".").pop());
+        if (/\.(step|x_t|x_b|stl)$/i.test(état.fichier)) a.classList.add("sortie-3d");
         $("lien").append(a);
+        grouper();
+      }
+      if (état.esquisses_step && !document.querySelector(`a[data-job-esq="${job}"]`)) {
+        const a = document.createElement("a");
+        a.className = "action telecharger";
+        a.href = `/download?job=${job}&quoi=esquisses`;
+        a.dataset.jobEsq = job;
+        a.title = t("télécharger-esq", état.esquisses_step);
+        a.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>`;
+        a.append("STEP");
+        $("lien-esq").append(a);
+        grouper();
       }
       if (état.fini) {
         if (état.vue && !enPlus) {
@@ -1845,6 +2004,7 @@ function montrer(vue) {
   V.boites = m.boites;
   V.rayon = vue.rayon || 1;
   V.sel = -1; V.survol = -1;
+  préparerEsquisses(gl, vue.esquisses);
   orienter("iso");
   delete $("vue-info").dataset.t;  // status replaces the help text: no longer translated
   $("vue-info").textContent = t("vue-prête", vue.faces.length, vue.corps);
@@ -1960,6 +2120,87 @@ function arêtes(mvp, seule, encre) {
   gl.drawArrays(gl.LINES, 0, V.nTraits);
 }
 
+// ------------------------------------------------------- the sketches
+// Strokes placed in the model, drawn by the edge program (aFace absent:
+// nothing is left out). A switch shows them all; a click on one of their
+// strokes picks the sketch, and the status line says which.
+function préparerEsquisses(gl, esq) {
+  V.esq = null;
+  $("vue-esq-bascule").hidden = !esq;
+  if (!esq) return;
+  const brut = atob(esq.sommets);
+  const octets = new Uint8Array(brut.length);
+  for (let i = 0; i < brut.length; i++) octets[i] = brut.charCodeAt(i);
+  const pos = new Float32Array(octets.buffer);
+  V.esq = { liste: esq.liste, pos, b: tampon(gl, pos), choisie: -1 };
+}
+
+// A sketch's stroke ranges: [first, count] in vertices.
+function plages(e) { return [e.trait, e.construction].filter(([, n]) => n); }
+
+// The sketch with a stroke within 6 px of the click, or -1.
+function esquisseSous(c, ev) {
+  if (!V.esq || !$("vue-esq").checked) return -1;
+  const r = c.getBoundingClientRect();
+  const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+  const m = matrice(), p = V.esq.pos;
+  const écran = (k) => {
+    const x = p[3 * k], y = p[3 * k + 1], z = p[3 * k + 2];
+    const w = m[3] * x + m[7] * y + m[11] * z + m[15];
+    return [((m[0] * x + m[4] * y + m[8] * z + m[12]) / w + 1) / 2 * r.width,
+            (1 - (m[1] * x + m[5] * y + m[9] * z + m[13]) / w) / 2 * r.height];
+  };
+  let meilleure = -1, d2min = 36;
+  V.esq.liste.forEach((e, i) => {
+    for (const [début, n] of plages(e)) {
+      for (let k = début; k + 1 < début + n; k += 2) {
+        const [ax, ay] = écran(k), [bx, by] = écran(k + 1);
+        const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+        const s = l2 ? Math.max(0, Math.min(1, ((mx - ax) * dx + (my - ay) * dy) / l2)) : 0;
+        const ex = ax + s * dx - mx, ey = ay + s * dy - my, d2 = ex * ex + ey * ey;
+        if (d2 < d2min) { d2min = d2; meilleure = i; }
+      }
+    }
+  });
+  return meilleure;
+}
+
+function choisirEsquisse(i) {
+  V.esq.choisie = i;
+  const e = V.esq.liste[i];
+  delete $("vue-info").dataset.t;
+  $("vue-info").textContent = t("esq-info", e.nom, e.fonction);
+  redessiner();
+}
+
+function esquisses(mvp) {
+  if (!V.esq || !$("vue-esq").checked) return;
+  const gl = V.gl;
+  gl.useProgram(V.trait);
+  gl.disableVertexAttribArray(1); gl.disableVertexAttribArray(2);
+  gl.disableVertexAttribArray(3);
+  gl.vertexAttrib1f(2, 0);
+  lier(0, V.esq.b, 3);
+  const choisie = V.esq.choisie;
+  const ordre = V.esq.liste.map((_, i) => i).filter((i) => i !== choisie);
+  if (choisie >= 0) ordre.push(choisie);  // on top of the others
+  for (const i of ordre) {
+    const e = V.esq.liste[i], vive = i === choisie;
+    for (const [clé, encre] of [["construction", vive ? [0.8, 0.45, 0.1] : [0.55, 0.58, 0.64]],
+                                ["trait", vive ? [0.95, 0.55, 0.1] : [0.1, 0.45, 0.9]]]) {
+      const [début, n] = e[clé];
+      if (!n) continue;
+      uniformes(V.trait, { uMVP: mvp, uSeul: -1, uEncre: encre });
+      gl.drawArrays(gl.LINES, début, n);
+    }
+  }
+}
+
+$("vue-esq").onchange = () => {
+  if (V.esq && !$("vue-esq").checked) V.esq.choisie = -1;
+  if (V.gl) redessiner();
+};
+
 function redessiner() {
   if (V.attente) return;
   V.attente = requestAnimationFrame(() => {
@@ -1979,6 +2220,7 @@ function redessiner() {
     gl.disable(gl.POLYGON_OFFSET_FILL);
     arêtes(mvp, -1, SW.arête);
     if (V.survol >= 0 && V.survol !== V.sel) arêtes(mvp, V.survol, SW.survol);
+    esquisses(mvp);
     trièdre();
   });
 }
@@ -2113,7 +2355,10 @@ function brancher(c) {
   c.addEventListener("pointerup", (e) => {
     if (glisse && glisse.bouton === 0 &&
         Math.hypot(e.clientX - glisse.x0, e.clientY - glisse.y0) < 4) {
-      choisir(sous(c, e));
+      // A sketch stroke under the click wins over the face behind it.
+      const k = esquisseSous(c, e);
+      if (k >= 0) choisirEsquisse(k);
+      else choisir(sous(c, e));
     }
     glisse = null;
   });
@@ -2465,6 +2710,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "lignes": job.journal.since(depuis),
                 "fini": job.done,
                 "fichier": job.result.name if job.result else "",
+                "esquisses_step": job.esquisses_step.name if job.esquisses_step else "",
                 "vue": job.vue is not None,
                 "plan": job.plan is not None,
                 "fiche": job.fiche is not None,
@@ -2478,6 +2724,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if route == "/fiche" and job.fiche:
             self._send(200, "application/json", job.fiche)
+            return
+        if route == "/download" and q.get("quoi") == "esquisses" and job.esquisses_step:
+            self._send(200, "application/octet-stream", job.esquisses_step.read_bytes(),
+                       job.esquisses_step.name)
             return
         if route == "/download" and job.result:
             self._send(

@@ -15,7 +15,8 @@ It is a file reader for interoperability, not a CAD kernel or an API.
 
 | | read | not read |
 |---|---|---|
-| **Part** | the exact solid of the saved configuration (Parasolid B-rep → `.x_t`, STEP), colours, face names | the feature tree (sketches, features, equations, history): what you get is the final solid, not how it was built |
+| **Part** | the exact solid of the saved configuration (Parasolid B-rep → `.x_t`, STEP), colours, face names | the feature tree (features, equations, history): what you get is the final solid, not how it was built |
+| | sketches, placed in the model: shown in the 3D view, exported as a STEP of their curves only | sketch dimensions and relations; sketches of older saves |
 | | properties: summary, custom and per-configuration properties, configuration names, material and density, preview image | geometry of configurations that were not saved with their geometry (the page says which ones were) |
 | | mass, volume, area, centre of mass and inertia at the centre of mass, **when SolidWorks stored them** (it does when a property links to them) | mass properties SolidWorks did not store |
 | **Assembly** | components and a bill of materials by part file (→ CSV), placements, hidden, suppressed and excluded-from-BOM states, the configuration each instance shows, with its part files each part's properties and material in the CSV, mates (name, type, the components they link, a distance's value), the display mesh (→ STL); with its part files, an exact STEP assembly | angle mate values and the faces mates hold; configurations; the exact geometry, which is in the parts |
@@ -48,7 +49,9 @@ python tools/webui.py                          # http://127.0.0.1:8765
 ```
 
 Drop a part, download the `.x_t` or STEP, and view it in 3D: click a face
-to read its name, `F<node>`. The page is in English, with a French option.
+to read its name, `F<node>`. The Sketches switch overlays the part's
+sketches; with OpenCASCADE, a STEP of the sketches alone, without the solid,
+downloads too. The page is in English, with a French option.
 Here the file is sent to this local server; uploads are deleted after conversion, results
 after 30 minutes. `PORT` and `OPENSW_HOST` set the address; on a public
 server, put an authenticating reverse proxy in front.

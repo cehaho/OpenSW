@@ -255,5 +255,6 @@ def maillage(chemin: Path | str) -> dict:
         "faces": faces,
         "corps": max((f["corps"] for f in faces), default=0),
         "rayon": diagonale / 2,
+        "centre": list(centre),
         "sommets": base64.b64encode(sommets.tobytes()).decode("ascii"),
     }
