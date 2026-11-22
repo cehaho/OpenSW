@@ -129,8 +129,7 @@ def _vue_navigateur(job: webui.Job) -> None:
         return
     job.journal.say("3D view: meshing in the browser (OpenCASCADE in WebAssembly)",
                     "step")
-    # The sketches, read here as on the server; without OpenCASCADE, no
-    # sketch STEP. Their vertices stay in the model frame: the worker moves
+    # The sketches, read and written as STEP here as on the server. Their vertices stay in the model frame: the worker moves
     # them to its mesh centre (``esquissesEnVue`` in tools/pages/travailleur.js).
     job.esquisses = webui.lire_esquisses(job)
 
@@ -181,7 +180,8 @@ def _lancer(route, nom, data, dire) -> dict:
     (cible or webui.run)(job, data)
 
     sortie = {"fichier": "", "resultat": None, "vue": None, "plan": None,
-              "etiquete": None, "faces": None, "fiche": None, "esquisses": None}
+              "etiquete": None, "faces": None, "fiche": None, "esquisses": None,
+              "esq_fichier": "", "esq_resultat": None}
     if job.result is not None and job.result.exists():
         sortie["fichier"] = job.result.name
         sortie["resultat"] = job.result.read_bytes()
@@ -196,6 +196,9 @@ def _lancer(route, nom, data, dire) -> dict:
         sortie["faces"] = json.dumps(faces)
     if job.esquisses:
         sortie["esquisses"] = json.dumps(job.esquisses)
+    if job.esquisses_step is not None and job.esquisses_step.exists():
+        sortie["esq_fichier"] = job.esquisses_step.name
+        sortie["esq_resultat"] = job.esquisses_step.read_bytes()
     if job.dossier is not None:
         shutil.rmtree(job.dossier, ignore_errors=True)
     return sortie

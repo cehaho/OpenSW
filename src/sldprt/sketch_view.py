@@ -4,17 +4,17 @@
 
     reading = read("part.SLDPRT")
     strokes(reading)                    # [{nom, 3d, fonction, trait, construction}]
-    write_step(reading, "part.sketches.step", "part — sketches")   # needs OCP
+    write_step(reading, "part.sketches.step", "part — sketches")
 
-Everything runs in the page's process, under Pyodide too (no OpenCASCADE, no
-subprocess), except :func:`write_step`, which imports OpenCASCADE when
-called. The tree nodes, their type (MFC class, ``KeyWords`` otherwise), the
+Everything runs in the page's process, in pure Python, under Pyodide too (no
+OpenCASCADE, no subprocess). The tree nodes, their type (MFC class, ``KeyWords`` otherwise), the
 sketches (:mod:`sldprt.sketches`, :mod:`sldprt.sketch_curves` for a planar
 sketch, :mod:`sldprt.sketches3d` for a 3D sketch), the folder ends and the
 hierarchy: an absorbed sketch is the child of its feature, a shared-sketch
 instance (« 3DSketch11<3> ») takes its original's geometry
 (:mod:`sldprt.instances`). Each sketch is placed by its ``model_to_sketch``
-frame; ellipses and splines become polylines within :data:`SAG`.
+frame. For the view, ellipses and splines become polylines within
+:data:`SAG`; the STEP writes them exactly.
 
 Only the sketches are read: dimensions, planes, feature definitions are
 not. Stroke units: millimetres.
@@ -22,11 +22,8 @@ not. Stroke units: millimetres.
 
 from __future__ import annotations
 
-import contextlib
-import io
 import itertools
 import math
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -326,6 +323,13 @@ def _de_boor(degree: int, knots: list[float], poles: list[list[float]], t: float
     return (x / w, y / w, z / w)
 
 
+def _closed(start, end) -> bool:
+    """A trimmed spline whose two ends are the same point is closed: it is
+    taken whole. Trimmed between its ends, a periodic spline fell to zero
+    length and was missing from the view."""
+    return math.dist(start, end) < 1e-9
+
+
 def _spline_points(b: dict, start=None, end=None) -> list[tuple[float, ...]]:
     """The spline sampled finely enough to stay within :data:`SAG`; trimmed
     (``start``, ``end``) between the parameters closest to its ends."""
@@ -335,7 +339,7 @@ def _spline_points(b: dict, start=None, end=None) -> list[tuple[float, ...]]:
     n = min(20000, 200 * max(1, len(po) - deg))
     ts = [t0 + (t1 - t0) * i / n for i in range(n + 1)]
     pts = [_de_boor(deg, kn, po, t) for t in ts]
-    if start is not None and end is not None:
+    if start is not None and end is not None and not _closed(start, end):
         i0 = min(range(len(pts)), key=lambda i: math.dist(pts[i], start))
         i1 = min(range(len(pts)), key=lambda i: math.dist(pts[i], end))
         a, b_ = sorted((i0, i1))
@@ -462,17 +466,59 @@ def draw_segment(drawing, layer: str, s: dict, frame: Frame, normal=None) -> boo
             ax, ay = _ocs(n)
             drawing.arc(layer, cm, radius, _angle(cm, am, ax, ay), _angle(cm, bm, ax, ay), n)
     elif t == 2:
-        drawing.polyline(layer, [frame.point(p) for p in _ellipse_points(s)])
+        if hasattr(drawing, "ellipse"):
+            _exact_ellipse(drawing, layer, s, frame)
+        else:
+            drawing.polyline(layer, [frame.point(p) for p in _ellipse_points(s)])
     elif t == 3:
         b = s.get("bspline")
         if not b:
             return False
+        if hasattr(drawing, "spline"):
+            _exact_spline(drawing, layer, b, s, frame)
+            return True
         pts = (_spline_points(b, _xy(s.get("start")), _xy(s.get("end"))) if b.get("trimmed")
                else _spline_points(b))
         drawing.polyline(layer, [frame.point(p) for p in pts])
     else:
         return False
     return True
+
+
+def _exact_ellipse(drawing, layer: str, s: dict, frame: Frame) -> None:
+    """The ellipse of ``s`` to ``drawing.ellipse``, same angles as :func:`_ellipse_points`."""
+    c, g, p = _xy(s["centre"]), _xy(s["major"]), _xy(s["minor"])
+    a, b = math.dist(c, g), math.dist(c, p)
+    u = [(g[i] - c[i]) / a for i in range(3)]
+    v = [-u[1], u[0], 0.0]
+
+    def angle(q):
+        d = [q[i] - c[i] for i in range(3)]
+        return math.atan2(sum(d[i] * v[i] for i in range(3)) / b, sum(d[i] * u[i] for i in range(3)) / a)
+
+    start, end = _xy(s.get("start")), _xy(s.get("end"))
+    if start is None or end is None or math.dist(start, end) < 1e-12:
+        t0, t1 = 0.0, 2 * math.pi
+    else:
+        t0, t1 = angle(start), angle(end)
+        if t1 <= t0:
+            t1 += 2 * math.pi
+    cm = frame.point(c)
+    axis = [frame.point([c[i] + u[i] for i in range(3)])[i] - cm[i] for i in range(3)]
+    y = [frame.point([c[i] + v[i] for i in range(3)])[i] - cm[i] for i in range(3)]
+    drawing.ellipse(layer, cm, a, b, axis, _cross(axis, y), t0, t1)
+
+
+def _exact_spline(drawing, layer: str, b: dict, s: dict, frame: Frame) -> None:
+    """The stored spline (poles placed by ``frame``, weights kept) to
+    ``drawing.spline``; trimmed, between the parameters of its ends."""
+    deg, kn, po = b["degree"], b["knots"], b["poles"]
+    t0, t1 = kn[deg], kn[len(kn) - deg - 1]
+    if b.get("trimmed") and s.get("start") and s.get("end") and not _closed(_xy(s["start"]), _xy(s["end"])):
+        u0, u1 = _parameter(b, _xy(s["start"]), t0, t1), _parameter(b, _xy(s["end"]), t0, t1)
+        t0, t1 = min(u0, u1), max(u0, u1)
+    poles = [list(frame.point(q[:3])) + list(q[3:4]) for q in po]
+    drawing.spline(layer, deg, kn, poles, t0, t1)
 
 
 def _normal_3d(s: dict, axis=None):
@@ -572,160 +618,223 @@ def strokes(reading) -> list[dict]:
 
 
 # --------------------------------------------------------------------------
-# The STEP of the sketches alone: OpenCASCADE, imported when called.
+# The STEP of the sketches alone, written in pure Python.
 
 
-@contextlib.contextmanager
-def _no_c_output():
-    """The process's standard output (descriptor 1) sent to the void."""
-    import os
+def _real(x: float) -> str:
+    """A STEP real: always a decimal point, exponent as ``E``."""
+    x = float(x)
+    if x == 0:
+        return "0."
+    s = repr(x)
+    if "e" in s:
+        m, e = s.split("e")
+        return (m if "." in m else m + ".") + "E" + str(int(e))
+    return s if "." in s else s + "."
 
-    sys.stdout.flush()
-    kept = os.dup(1)
-    null = os.open(os.devnull, os.O_WRONLY)
-    try:
-        os.dup2(null, 1)
-        yield
-    finally:
-        os.dup2(kept, 1)
-        os.close(null)
-        os.close(kept)
+
+def _string(s: str) -> str:
+    """A STEP string: quotes and backslashes doubled, non-ASCII as
+    ``\\X2\\hhhh\\X0\\``."""
+    out = []
+    for c in s.replace("\\", "\\\\").replace("'", "''"):
+        out.append(c if 32 <= ord(c) < 127 else f"\\X2\\{ord(c):04X}\\X0\\")
+    return "'" + "".join(out) + "'"
+
+
+def _unit(v) -> list[float]:
+    n = math.sqrt(sum(c * c for c in v))
+    return [c / n for c in v]
+
+
+def _cross(a, b) -> list[float]:
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+
+
+def _parameter(b: dict, q, t0: float, t1: float) -> float:
+    """The parameter of spline ``b`` closest to point ``q``: the closest of
+    400 samples, then a golden-section search between its neighbours."""
+    deg, kn, po = b["degree"], b["knots"], b["poles"]
+    n = 400
+    ts = [t0 + (t1 - t0) * i / n for i in range(n + 1)]
+    i = min(range(n + 1), key=lambda k: math.dist(_de_boor(deg, kn, po, ts[k]), q))
+    a, c = ts[max(0, i - 1)], ts[min(n, i + 1)]
+    r = (math.sqrt(5) - 1) / 2
+    for _ in range(80):
+        x1, x2 = c - r * (c - a), a + r * (c - a)
+        if math.dist(_de_boor(deg, kn, po, x1), q) < math.dist(_de_boor(deg, kn, po, x2), q):
+            c = x2
+        else:
+            a = x1
+    return (a + c) / 2
 
 
 class Step:
-    """The :class:`Strokes` interface; ``layer`` is the name of the sub-shape
-    (a sketch, or its construction geometry). Coordinates in mm.
+    """The :class:`Strokes` interface, plus :meth:`ellipse` and
+    :meth:`spline`, which :func:`draw_segment` uses when they exist;
+    ``layer`` names the curve set (the sketch, or its construction).
 
-    A wireframe STEP (AP214), in millimetres, that holds **only the
-    sketches**: no solid, no surface, a single part. Lines and arcs are
-    exact; ellipses and splines are B-splines approximated within
-    :data:`TOLERANCE_MM` of the points (themselves within :data:`SAG`).
-    SolidWorks opens such a STEP as one part whose curves become 3D
-    sketches, grouped its own way and without the names."""
+    An AP214 wireframe STEP in millimetres holding **only the sketches**: no
+    solid, no surface, one product. Each curve is a ``TRIMMED_CURVE`` of a
+    ``LINE``, ``CIRCLE``, ``ELLIPSE`` or ``B_SPLINE_CURVE_WITH_KNOTS`` — the
+    spline stored in the file, its poles, knots and weights, not an
+    approximation. A closed ellipse or spline is cut in two: in one piece,
+    SolidWorks 2026 kept only one curve of the whole file. Imported in
+    SolidWorks 2026, such a file opens as one part whose curves become 3D
+    sketches; SolidWorks groups them its own way and drops the names."""
 
     def __init__(self):
-        self.edges: dict[str, list] = {}
+        self.entities: list[str] = []
+        self.curves: dict[str, list[int]] = {}
 
-    @staticmethod
-    def _p(q):
-        from OCP.gp import gp_Pnt
+    def _e(self, text: str) -> int:
+        self.entities.append(text)
+        return len(self.entities)
 
-        return gp_Pnt(*(float(c) * MM for c in q[:3]))
+    def _point(self, q) -> int:
+        return self._e("CARTESIAN_POINT('',(" + ",".join(_real(c * MM) for c in q[:3]) + "))")
 
-    def _add(self, layer, edge) -> None:
-        self.edges.setdefault(layer, []).append(edge)
+    def _direction(self, v) -> int:
+        return self._e("DIRECTION('',(" + ",".join(_real(c) for c in _unit(v)) + "))")
+
+    def _placement(self, centre, normal, axis) -> int:
+        return self._e(f"AXIS2_PLACEMENT_3D('',#{self._point(centre)},#{self._direction(normal)},"
+                       f"#{self._direction(axis)})")
+
+    def _trimmed(self, layer, curve: int, a, ta: float, b, tb: float) -> None:
+        pa, pb = self._point(a), self._point(b)
+        i = self._e(f"TRIMMED_CURVE('',#{curve},(#{pa},PARAMETER_VALUE({_real(ta)})),"
+                    f"(#{pb},PARAMETER_VALUE({_real(tb)})),.T.,.PARAMETER.)")
+        self.curves.setdefault(layer, []).append(i)
 
     def line(self, layer, a, b):
-        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
-
-        if math.dist(a[:3], b[:3]) * MM > 1e-9:
-            self._add(layer, BRepBuilderAPI_MakeEdge(self._p(a), self._p(b)).Edge())
+        length = math.dist(a[:3], b[:3])
+        if length * MM <= 1e-9:
+            return
+        d = [(b[i] - a[i]) / length for i in range(3)]
+        v = self._e(f"VECTOR('',#{self._direction(d)},1.)")
+        curve = self._e(f"LINE('',#{self._point(a)},#{v})")
+        self._trimmed(layer, curve, a, 0.0, b, length * MM)
 
     def arc(self, layer, centre, radius, a0, a1, normal=(0.0, 0.0, 1.0)):
-        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
-        from OCP.gp import gp_Ax2, gp_Circ, gp_Dir
+        ax, ay = _ocs(normal)
+        circle = self._e(f"CIRCLE('',#{self._placement(centre, normal, ax)},{_real(radius * MM)})")
 
-        ax, _ay = _ocs(normal)
-        # The circle's X axis is the OCS one: angles are counted the same way.
-        axes = gp_Ax2(self._p(centre), gp_Dir(*map(float, normal)), gp_Dir(*map(float, ax)))
-        circle = gp_Circ(axes, float(radius) * MM)
+        def point(t):
+            return [centre[i] + radius * (math.cos(t) * ax[i] + math.sin(t) * ay[i]) for i in range(3)]
+
         if a1 is None:
-            self._add(layer, BRepBuilderAPI_MakeEdge(circle).Edge())
+            t0, t1 = 0.0, 2 * math.pi
+        else:
+            t0, t1 = math.radians(a0), math.radians(a1)
+            if t1 <= t0:
+                t1 += 2 * math.pi
+        self._trimmed(layer, circle, point(t0), t0, point(t1), t1)
+
+    def ellipse(self, layer, centre, a, b, axis, normal, t0, t1):
+        """The ellipse of semi-axes ``a`` (along ``axis``) and ``b``, from ``t0`` to ``t1`` (radians)."""
+        axis = _unit(axis)
+        y = _unit(_cross(normal, axis))
+        curve = self._e(f"ELLIPSE('',#{self._placement(centre, normal, axis)},{_real(a * MM)},{_real(b * MM)})")
+
+        def point(t):
+            return [centre[i] + a * math.cos(t) * axis[i] + b * math.sin(t) * y[i] for i in range(3)]
+
+        if t1 - t0 > 2 * math.pi - 1e-9:
+            m = (t0 + t1) / 2
+            self._trimmed(layer, curve, point(t0), t0, point(m), m)
+            self._trimmed(layer, curve, point(m), m, point(t1), t1)
             return
-        t0 = math.radians(a0)
-        t1 = math.radians(a1)
-        if t1 <= t0:
-            t1 += 2 * math.pi
-        self._add(layer, BRepBuilderAPI_MakeEdge(circle, t0, t1).Edge())
+        self._trimmed(layer, curve, point(t0), t0, point(t1), t1)
 
-    def polyline(self, layer, pts):
-        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakePolygon
-        from OCP.GeomAbs import GeomAbs_C2
-        from OCP.GeomAPI import GeomAPI_PointsToBSpline
-        from OCP.TColgp import TColgp_Array1OfPnt
+    def spline(self, layer, degree, knots, poles, t0, t1):
+        """The NURBS (poles already placed in the model, weight 4th), from ``t0`` to ``t1``."""
+        distinct, mult = [], []
+        for k in knots:
+            if distinct and abs(k - distinct[-1]) < 1e-15:
+                mult[-1] += 1
+            else:
+                distinct.append(k)
+                mult.append(1)
+        ids = ",".join(f"#{self._point(q)}" for q in poles)
+        base = f"{degree},({ids}),.UNSPECIFIED.,.F.,.F."
+        kn = f"({','.join(map(str, mult))}),({','.join(_real(k) for k in distinct)}),.UNSPECIFIED."
+        weights = [q[3] if len(q) > 3 else 1.0 for q in poles]
+        if any(abs(w - 1.0) > 1e-15 for w in weights):
+            curve = self._e(f"( BOUNDED_CURVE() B_SPLINE_CURVE({base}) B_SPLINE_CURVE_WITH_KNOTS({kn}) "
+                            "CURVE() GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE(("
+                            f"{','.join(_real(w) for w in weights)})) REPRESENTATION_ITEM('') )")
+        else:
+            curve = self._e(f"B_SPLINE_CURVE_WITH_KNOTS('',{base},{kn})")
 
-        pts = [q for i, q in enumerate(pts)
-               if i == 0 or math.dist(q[:3], pts[i - 1][:3]) * MM > 1e-9]
-        if len(pts) < 2:
+        def point(t):
+            return _de_boor(degree, knots, poles, t)
+
+        if math.dist(point(t0), point(t1)) * MM < 1e-6:
+            m = (t0 + t1) / 2
+            self._trimmed(layer, curve, point(t0), t0, point(m), m)
+            self._trimmed(layer, curve, point(m), m, point(t1), t1)
             return
-        if len(pts) > 4 and math.dist(pts[0][:3], pts[-1][:3]) * MM < 1e-6:
-            # A closed curve (a whole ellipse) in two halves: in one piece,
-            # SolidWorks reads it alone, but with other curves in the file it
-            # keeps only one of them.
-            m = len(pts) // 2
-            self.polyline(layer, pts[: m + 1])
-            self.polyline(layer, pts[m:])
-            return
-        array = TColgp_Array1OfPnt(1, len(pts))
-        for i, q in enumerate(pts, start=1):
-            array.SetValue(i, self._p(q))
-        with contextlib.suppress(Exception):
-            fit = GeomAPI_PointsToBSpline(array, 3, 8, GeomAbs_C2, TOLERANCE_MM)
-            if fit.IsDone():
-                self._add(layer, BRepBuilderAPI_MakeEdge(fit.Curve()).Edge())
-                return
-        poly = BRepBuilderAPI_MakePolygon()
-        for i in range(1, len(pts) + 1):
-            poly.Add(array.Value(i))
-        self._add(layer, poly.Wire())
+        self._trimmed(layer, curve, point(t0), t0, point(t1), t1)
 
-    def write(self, out: Path, part_name: str) -> None:
-        from OCP.BRep import BRep_Builder
-        from OCP.IFSelect import IFSelect_RetDone
-        from OCP.Interface import Interface_Static
-        from OCP.STEPCAFControl import STEPCAFControl_Writer
-        from OCP.STEPControl import STEPControl_GeometricCurveSet
-        from OCP.TCollection import TCollection_ExtendedString
-        from OCP.TDataStd import TDataStd_Name
-        from OCP.TDocStd import TDocStd_Document
-        from OCP.TopoDS import TopoDS_Compound
-        from OCP.XCAFDoc import XCAFDoc_DocumentTool
+    def text(self, part_name: str, timestamp: str) -> str:
+        """The whole file."""
+        body = list(self.entities)
 
-        b = BRep_Builder()
-        whole = TopoDS_Compound()
-        b.MakeCompound(whole)
-        parts = []
-        for name, edges in self.edges.items():
-            c = TopoDS_Compound()
-            b.MakeCompound(c)
-            for e in edges:
-                b.Add(c, e)
-            b.Add(whole, c)
-            parts.append((name, c))
-        # One part, each sketch a named sub-shape: a single product in the
-        # STEP; several top-level shapes would make an assembly.
-        doc = TDocStd_Document(TCollection_ExtendedString("XmlOcaf"))
-        tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
-        root = tool.AddShape(whole, False)
-        TDataStd_Name.Set_s(root, TCollection_ExtendedString(part_name))
-        for name, c in parts:
-            TDataStd_Name.Set_s(tool.AddSubShape(root, c), TCollection_ExtendedString(name))
-        Interface_Static.SetCVal_s("write.step.unit", "MM")
-        Interface_Static.SetIVal_s("write.step.assembly", 0)
-        Interface_Static.SetCVal_s("write.step.schema", "AP214IS")
-        w = STEPCAFControl_Writer()
-        w.SetNameMode(True)
-        # OpenCASCADE talks on the process's standard output, from C++:
-        # redirecting ``sys.stdout`` is not enough.
-        with contextlib.redirect_stdout(io.StringIO()), _no_c_output():
-            if not w.Transfer(doc, STEPControl_GeometricCurveSet):
-                raise RuntimeError("OpenCASCADE does not transfer the sketches")
-            out.parent.mkdir(parents=True, exist_ok=True)
-            if w.Write(str(out)) != IFSelect_RetDone:
-                raise RuntimeError(f"OpenCASCADE does not write {out}")
+        def e(s):
+            body.append(s)
+            return len(body)
+
+        sets = [e(f"GEOMETRIC_CURVE_SET({_string(name)},({','.join(f'#{i}' for i in ids)}))")
+                for name, ids in self.curves.items()]
+        mm = e("( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) )")
+        rad = e("( NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) )")
+        sr = e("( NAMED_UNIT(*) SI_UNIT($,.STERADIAN.) SOLID_ANGLE_UNIT() )")
+        unc = e(f"UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-07),#{mm},'distance_accuracy_value',"
+                "'confusion accuracy')")
+        ctx = e(f"( GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#{unc})) "
+                f"GLOBAL_UNIT_ASSIGNED_CONTEXT((#{mm},#{rad},#{sr})) REPRESENTATION_CONTEXT('Context #1',"
+                "'3D Context with UNIT and UNCERTAINTY') )")
+        o = e("CARTESIAN_POINT('',(0.,0.,0.))")
+        z = e("DIRECTION('',(0.,0.,1.))")
+        x = e("DIRECTION('',(1.,0.,0.))")
+        origin = e(f"AXIS2_PLACEMENT_3D('',#{o},#{z},#{x})")
+        rep = e(f"GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION('',(#{origin},"
+                f"{','.join(f'#{i}' for i in sets)}),#{ctx})")
+        app = e("APPLICATION_CONTEXT('core data for automotive mechanical design processes')")
+        e(f"APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2000,#{app})")
+        pctx = e(f"PRODUCT_CONTEXT('',#{app},'mechanical')")
+        name = _string(part_name)
+        product = e(f"PRODUCT({name},{name},'',(#{pctx}))")
+        e(f"PRODUCT_RELATED_PRODUCT_CATEGORY('part',$,(#{product}))")
+        form = e(f"PRODUCT_DEFINITION_FORMATION('','',#{product})")
+        dctx = e(f"PRODUCT_DEFINITION_CONTEXT('part definition',#{app},'design')")
+        definition = e(f"PRODUCT_DEFINITION('design','',#{form},#{dctx})")
+        shape = e(f"PRODUCT_DEFINITION_SHAPE('','',#{definition})")
+        e(f"SHAPE_DEFINITION_REPRESENTATION(#{shape},#{rep})")
+        head = ["ISO-10303-21;", "HEADER;", "FILE_DESCRIPTION(('openSW sketches'),'2;1');",
+                f"FILE_NAME({name},'{timestamp}',(''),(''),'openSW','openSW','');",
+                "FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));", "ENDSEC;", "DATA;"]
+        return "\n".join(head + [f"#{i} = {s};" for i, s in enumerate(body, start=1)]
+                         + ["ENDSEC;", "END-ISO-10303-21;", ""])
 
 
-def write_step(reading, out, part_name: str | None = None) -> dict:
+def write_step(reading, out, part_name: str | None = None, timestamp: str | None = None) -> dict:
     """Write the sketches' STEP (``out``); return the count
-    ``{"sketches", "edges"}``. Nothing is written when there is no edge.
-    ``reading`` is a :class:`Reading` or a part path. Needs OpenCASCADE
-    (the ``occ`` extra): ``ImportError`` without it."""
-    import OCP  # noqa: F401 — failing here says at once what is missing
+    ``{"sketches", "edges"}``. Nothing is written when there is no curve.
+    ``reading`` is a :class:`Reading` or a part path. Pure Python: runs under
+    Pyodide too."""
+    import datetime
 
     if not isinstance(reading, Reading):
         reading = read(reading)
     step = Step()
     _walk(reading, step, lambda e, s: e["name"] + (" construction" if s["construction"] else ""))
-    if step.edges:
-        step.write(Path(out), part_name or f"{reading.name} — sketches")
-    return {"sketches": len(reading.sketches), "edges": sum(len(a) for a in step.edges.values())}
+    n = sum(len(c) for c in step.curves.values())
+    if n:
+        timestamp = timestamp or datetime.datetime.now().replace(microsecond=0).isoformat()
+        out = Path(out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(step.text(part_name or f"{reading.name} — sketches", timestamp),
+                       encoding="ascii", newline="\n")
+    return {"sketches": len(reading.sketches), "edges": n}

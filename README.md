@@ -50,8 +50,8 @@ python tools/webui.py                          # http://127.0.0.1:8765
 
 Drop a part, download the `.x_t` or STEP, and view it in 3D: click a face
 to read its name, `F<node>`. The Sketches switch overlays the part's
-sketches; with OpenCASCADE, a STEP of the sketches alone, without the solid,
-downloads too. The page is in English, with a French option.
+sketches, and a STEP of the sketches alone, without the solid, downloads
+too. The page is in English, with a French option.
 Here the file is sent to this local server; uploads are deleted after conversion, results
 after 30 minutes. `PORT` and `OPENSW_HOST` set the address; on a public
 server, put an authenticating reverse proxy in front.

@@ -173,6 +173,10 @@ onmessage = async (e) => {
       const resultat = new Uint8Array(r.resultat);
       postMessage({ id, fichier: r.fichier, resultat }, [resultat.buffer]);
     }
+    if (r.esq_fichier) {
+      const esqResultat = new Uint8Array(r.esq_resultat);
+      postMessage({ id, esqFichier: r.esq_fichier, esqResultat }, [esqResultat.buffer]);
+    }
     if (r.plan) postMessage({ id, plan: r.plan });
     if (r.fiche) postMessage({ id, fiche: r.fiche });
     if (r.vue) postMessage({ id, vue: r.vue });
