@@ -29,6 +29,14 @@ last poles are not its ends, it is flagged ``trimmed`` and keeps its two
 ends. **A spline can carry 0 at +80**: it then differs from a line only by
 the rest of its record (:func:`sldprt.sketches._spline`).
 
+**A spline whose u16 at +68 is zero gives way to an identical copy**
+(same knots, poles, ends and construction) kept in the same sketch; with no
+copy, it stays. Measured on "Sketch3" of "Fermoir echelle 2": two records of
+the same spline, ids 1 and 2, differing only by +68 (0, 1), the face number
+(0, 1) and the id; the API returns one. Across the 23 clasps, the corpus
+without ``loim`` and the ring, only "Sketch3" changes. What would refute it:
+an API spline with a zero +68 that has an identical copy in its sketch.
+
 Not read: periodicity (no periodic spline seen), where a trimmed spline is
 cut.
 """
@@ -108,6 +116,7 @@ def segments(data: bytes, start: int, stop: int) -> list[dict]:
 
     out: list[dict] = []
     doubtful: list[dict] = []
+    doubtful_splines: set[int] = set()
     for table in [*tables[first + 1 :], extended]:
         if table is not extended and _is_points(data, table):
             break
@@ -157,6 +166,8 @@ def segments(data: bytes, start: int, stop: int) -> list[dict]:
             if dubious:
                 doubtful.append(seg)
                 continue
+            if seg["type"] == 3 and int.from_bytes(data[q + 68 : q + 70], "little") == 0:
+                doubtful_splines.add(id(seg))
             out.append(seg)
     # The same doubtful lines sldprt.sketches.segments keeps: a face number,
     # both ends on kept segments, no copy.
@@ -168,7 +179,16 @@ def segments(data: bytes, start: int, stop: int) -> list[dict]:
                 and (seg["end"]["x"], seg["end"]["y"]) in ends
                 and not any(_same(o, seg) for o in out)):
             out.append(seg)
-    return out
+
+    # A spline with a zero +68 gives way to an identical copy; the others keep
+    # their place.
+    def copy(seg):
+        return any(id(o) not in doubtful_splines and o["type"] == 3
+                   and o["construction"] == seg["construction"] and o["bspline"] == seg["bspline"]
+                   and o["start"] == seg["start"] and o["end"] == seg["end"]
+                   for o in out)
+
+    return [s for s in out if id(s) not in doubtful_splines or not copy(s)]
 
 
 def _at_ends(poles, start, end, tol=1e-9) -> bool:
