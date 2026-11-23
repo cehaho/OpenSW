@@ -192,6 +192,57 @@ def run(job: Job, data: bytes) -> None:
                 "after this conversion", "detail")
 
 
+def _annotations_assemblage(job: Job, asm, fichiers: dict[str, Path], vue: dict) -> None:
+    """The sketches and PMI of the supplied parts, placed where the assembly
+    places each visible instance: read once per part, in its frame (mm),
+    then sent through the component's matrix. A name says the instance:
+    ``cube-1 · Sketch1``. An unreadable part does not break the view."""
+    from sldprt import sketch_view
+    from sldprt.dimxpert import pmi_en_vue
+
+    say = job.journal.say
+    lues: dict[str, tuple[list, list]] = {}
+    for nom in dict.fromkeys(c.fichier for c in asm.composants):
+        chemin = fichiers.get(nom.lower())
+        if chemin is None or chemin.suffix.lower() != ".sldprt":
+            continue
+        esq, pmi = [], []
+        try:
+            esq = sketch_view.strokes(chemin)
+        except Exception as échec:
+            say(f"{nom}: sketches not read — {type(échec).__name__}: {échec}", "note")
+        try:
+            pmi = pmi_en_vue(chemin)
+        except Exception as échec:
+            say(f"{nom}: PMI not read — {type(échec).__name__}: {échec}", "note")
+        lues[nom] = (esq, pmi)
+
+    def placer(c, xyz):
+        q = c.placer([v / 1000 for v in xyz])
+        return [1000 * v for v in q]
+
+    esquisses, annotations = [], []
+    for c in asm.composants:
+        if c.cache or c.supprime or c.fichier not in lues:
+            continue
+        esq, pmi = lues[c.fichier]
+        for e in esq:
+            placé = dict(e, nom=f"{c.nom} · {e['nom']}")
+            for clé in ("trait", "construction"):
+                pts = e[clé]
+                placé[clé] = [v for i in range(0, len(pts), 3)
+                              for v in placer(c, pts[i:i + 3])]
+            esquisses.append(placé)
+        for a in pmi:
+            annotations.append(dict(a, nom=f"{c.nom} · {a['nom']}", ancre=placer(c, a["ancre"])))
+    if esquisses:
+        vue["esquisses"] = esquisses_en_vue(esquisses, vue["centre"])
+        say(f"sketches: {len(esquisses)} in the view, placed per instance", "ok")
+    if annotations:
+        vue["pmi"] = annotations
+        say(f"PMI: {len(annotations)} DimXpert annotations in the view, placed per instance", "ok")
+
+
 def lire_fiche(job: Job) -> None:
     """Read the uploaded file's own record (properties, configurations,
     material, preview) while it is still there. A file that is not a
@@ -514,6 +565,8 @@ def voir_assemblage(job: Job, data: bytes) -> None:
         for motif, n in asm.non_lus.items():
             say(f"not shown: {motif}, {n}", "note")
         vue = to_view(asm)
+        if fichiers:
+            _annotations_assemblage(job, asm, fichiers, vue)
         say(f"{len(asm.composants)} component(s) read in "
             f"{time.monotonic() - début:.1f} s (SolidWorks display mesh, "
             "not the exact geometry)", "ok")
@@ -1818,13 +1871,18 @@ function actifs(oui) {
   const f = $("fichier").files[0];
   const prêt = oui && !!f;
   // Drawings and assemblies are viewed, not converted.
-  const plan = prêt && /\.slddrw$/i.test(f.name);
-  const asm = prêt && /\.sldasm$/i.test(f.name);
+  // Several files dropped: the browser does not guarantee their order, the
+  // assembly or drawing among them decides. Dropped with its parts, an
+  // assembly has become a zip that replaced the files.
+  const noms = [...$("fichier").files].map((x) => x.name);
+  const plan = prêt && noms.some((n) => /\.slddrw$/i.test(n));
+  const asm = prêt && !plan && noms.some((n) => /\.(sldasm|zip)$/i.test(n));
   // Once the .x_t is written, its download link takes the button's place.
   const xtPrêt = !!$("lien").querySelector("a.sortie-xt");
   $("btn-parasolid").hidden = !f || plan || asm || xtPrêt;
   $("btn-parasolid").disabled = !prêt || plan || asm;
-  $("btn-step-asm").hidden = !asm;
+  // Dropped with its parts, the assembly already has its STEP.
+  $("btn-step-asm").hidden = !asm || noms.some((n) => /\.zip$/i.test(n));
   $("btn-step-asm").disabled = !prêt;
   grouper();
 }

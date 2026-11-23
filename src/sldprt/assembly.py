@@ -439,7 +439,8 @@ def boite(asm: Assembly) -> tuple[tuple[float, ...], tuple[float, ...]] | None:
 def to_view(asm: Assembly) -> dict:
     """The assembly in the page's 3D view format (``vue3d``).
 
-    Millimetres, centred; a face is named ``<component>:<index>``.
+    Millimetres, centred (``centre`` says by how much); a face is named
+    ``<component>:<index>``.
     """
     b = boite(asm)
     if b is None:
@@ -461,6 +462,9 @@ def to_view(asm: Assembly) -> dict:
     return {
         "faces": faces,
         "corps": len(visibles),
+        # The centre taken off the vertices, in mm: sketches and PMI placed
+        # on the view refer to it too.
+        "centre": [1000 * v for v in centre],
         "rayon": diagonale / 2,
         "sommets": base64.b64encode(sommets.tobytes()).decode("ascii"),
     }
