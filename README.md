@@ -7,6 +7,23 @@ without SolidWorks. View parts, assemblies (`.SLDASM`) and drawings
 **Try it online: <https://cehaho.github.io/OpenSW/>** — your file is not
 uploaded to any server: it is read and converted in your browser.
 
+The three examples of the page, as it shows them:
+
+**A part** — NIST PMI test model FTC 08, its DimXpert PMI shown at their
+features, and the file's properties.
+
+![A NIST part with its DimXpert PMI](docs/screenshots/part.png)
+
+**An assembly** — NIST MTC CRADA box, 36 components from the display mesh
+the assembly stores, and its bill of materials.
+
+![The NIST assembly and its bill of materials](docs/screenshots/assembly.png)
+
+**A drawing** — a 2×4 LEGO brick: views, dimensions, the title block and a
+shaded view, with the linked texts the sheet shows.
+
+![A LEGO brick drawing](docs/screenshots/drawing.png)
+
 ## What it reads, and what it doesn't
 
 openSW shows what the file holds, as SolidWorks stored it. It recomputes
@@ -20,7 +37,7 @@ It is a file reader for interoperability, not a CAD kernel or an API.
 | | DimXpert PMI: dimensions and their tolerances, geometric tolerances, datums and datum reference frames, the features they apply to with their nominal geometry; shown in the 3D view, each at its feature | a dimension's nominal value (SolidWorks does not write it, it measures the geometry); where SolidWorks places each annotation on screen; annotations on features stored without geometry (fillets); PMI not made with DimXpert |
 | | properties: summary, custom and per-configuration properties, configuration names, material and density, preview image | geometry of configurations that were not saved with their geometry (the page says which ones were) |
 | | mass, volume, area, centre of mass and inertia at the centre of mass, **when SolidWorks stored them** (it does when a property links to them) | mass properties SolidWorks did not store |
-| **Assembly** | components and a bill of materials by part file (→ CSV), placements, hidden, suppressed and excluded-from-BOM states, the configuration each instance shows, with its part files each part's properties and material in the CSV, mates (name, type, the components they link, a distance's value), the display mesh (→ STL); with its part files, an exact STEP assembly | angle mate values and the faces mates hold; configurations; the exact geometry, which is in the parts |
+| **Assembly** | components and a bill of materials by part file (→ CSV), placements, hidden, suppressed and excluded-from-BOM states, the configuration each instance shows, with its part files each part's properties and material in the CSV, mates (name, type, the components they link, a distance's value), the display mesh (→ STL); with its part files, an exact STEP assembly and the parts' sketches and DimXpert PMI, placed per instance | angle mate values and the faces mates hold; configurations; the exact geometry, which is in the parts |
 | **Drawing** | sheets, lines (with their line types), arcs, texts (fonts, colours), tables, images, model view edges (projected, detail, broken, cropped, hidden-lines-removed views), shaded views from the display mesh SolidWorks stores, dimensions and their tolerances as drawn (→ SVG, DXF); linked texts (`$PRP:"…"`) with the value they show; dimension values as numbers (lengths, radii, diameters, angles) and length tolerances; the image SolidWorks keeps of each sheet | the edges a dimension measures; whether a radial dimension is R or Ø other than in its text; angle tolerances; hatches, centre marks, the sheet format; where an assembly places its parts (it is in the assembly file) |
 
 What is not read is counted in the log rather than hidden.
