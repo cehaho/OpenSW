@@ -1,5 +1,7 @@
 # openSW
 
+[![CodeQL](https://github.com/cehaho/OpenSW/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/cehaho/OpenSW/actions/workflows/github-code-scanning/codeql)
+
 Convert SolidWorks part files (`.SLDPRT`) to Parasolid (`.x_t`) and STEP,
 without SolidWorks. View parts, assemblies (`.SLDASM`) and drawings
 (`.SLDDRW`) in a web page.
