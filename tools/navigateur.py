@@ -132,6 +132,7 @@ def _vue_navigateur(job: webui.Job) -> None:
     # The sketches, read and written as STEP here as on the server. Their vertices stay in the model frame: the worker moves
     # them to its mesh centre (``esquissesEnVue`` in tools/pages/travailleur.js).
     job.esquisses = webui.lire_esquisses(job)
+    job.pmi = webui.lire_pmi(job)
 
 
 #: What the server says and the browser does not do.
@@ -144,8 +145,9 @@ def lancer(route: str, nom: str, data: bytes, dire: Callable[[str], None],
 
     *dire* receives each journal line as JSON, as it comes. Returns
     ``{"fichier", "resultat", "vue", "plan", "etiquete", "faces", "fiche",
-    "esquisses"}``; for a part, ``esquisses`` holds its sketches as strokes
-    (:func:`sldprt.sketch_view.strokes`, mm in the model).
+    "esquisses", "pmi"}``; for a part, ``esquisses`` holds its sketches as strokes
+    (:func:`sldprt.sketch_view.strokes`, mm in the model) and ``pmi`` its
+    DimXpert annotations (:func:`sldprt.dimxpert.pmi_en_vue`).
     """
     if hasattr(data, "to_bytes"):  # a Uint8Array from JavaScript
         data = data.to_bytes()
@@ -164,6 +166,7 @@ def _lancer(route, nom, data, dire) -> dict:
     job = webui.Job(webui.safe_name(nom), route)
     job.etiquete = None
     job.esquisses = None
+    job.pmi = None
     dit = job.journal.say
 
     def say(text: str, kind: str = "detail") -> None:
@@ -180,7 +183,7 @@ def _lancer(route, nom, data, dire) -> dict:
     (cible or webui.run)(job, data)
 
     sortie = {"fichier": "", "resultat": None, "vue": None, "plan": None,
-              "etiquete": None, "faces": None, "fiche": None, "esquisses": None,
+              "etiquete": None, "faces": None, "fiche": None, "esquisses": None, "pmi": None,
               "esq_fichier": "", "esq_resultat": None}
     if job.result is not None and job.result.exists():
         sortie["fichier"] = job.result.name
@@ -194,6 +197,8 @@ def _lancer(route, nom, data, dire) -> dict:
     if job.etiquete is not None:
         sortie["etiquete"], faces = job.etiquete
         sortie["faces"] = json.dumps(faces)
+    if job.pmi:
+        sortie["pmi"] = json.dumps(job.pmi)
     if job.esquisses:
         sortie["esquisses"] = json.dumps(job.esquisses)
     if job.esquisses_step is not None and job.esquisses_step.exists():
