@@ -770,15 +770,16 @@ HTML = r"""<!doctype html>
   button:disabled { opacity: .45; cursor: not-allowed; }
   /* The drop zone does not need the full width: the ribbon sits to its
      right, below it when the window is narrow. */
-  #depot-ligne { display: flex; gap: var(--s4); align-items: center; flex-wrap: wrap; }
+  #depot-ligne { display: flex; gap: var(--s3); align-items: center; flex-wrap: wrap; }
   .carte:has(> #depot-ligne) { padding: var(--s3); }
   #depot-ligne { align-items: stretch; }
   #depot-ligne #depot {
-    flex: 0 0 auto; max-width: 230px; display: grid; grid-template-columns: auto minmax(0, 1fr);
+    flex: 0 0 auto; max-width: 250px; display: grid; grid-template-columns: auto minmax(0, 1fr);
     column-gap: var(--s3); row-gap: 2px; align-content: center; text-align: left;
     padding: var(--s3) var(--s4);
   }
   #depot-ligne #depot svg { grid-row: span 2; }
+  #depot-ligne #depot > span:not(#depot-nom) { white-space: nowrap; }
   #depot-ligne #depot-nom { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #actions { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center; }
   #actions button { flex: 0 0 auto; }
@@ -1199,10 +1200,7 @@ HTML = r"""<!doctype html>
 
   <div class="carte" id="plan-carte">
     <div class="onglets" id="plan-onglets"></div>
-    <div class="vue-cadre"><div id="plan"></div>
-      <button class="icone plein" data-cible="plan-carte" data-t-title="plein-écran"
-              title="Full page (Esc to go back)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
-    </div>
+    <div class="vue-cadre"><div id="plan"></div></div>
     <div class="vue-barre">
       <span id="plan-info" class="vide" data-t="aide-plan">Click a line to read its name.
       Drag: pan · wheel: zoom.</span>
@@ -2477,6 +2475,7 @@ function préparer(vue, pos) {
 function montrer(vue) {
   $("vue-carte").style.display = "block";
   $("ruban-vue").hidden = $("ruban-orienter").hidden = false;
+  $("ruban-orienter").querySelector("[data-cube]").hidden = false;
   const canvas = $("vue");
   if (!V.gl) {
     V.gl = canvas.getContext("webgl", { antialias: true, alpha: true });
@@ -3092,7 +3091,11 @@ function survoler(c, e) {
   }, 40);
 }
 
-$("vue-recadrer").onclick = () => V.gl && ajuster();
+// Zoom to fit: on the drawing when it is the one shown.
+$("vue-recadrer").onclick = () => {
+  if ($("plan-carte").style.display === "block") P.plein && cadrer({ ...P.plein });
+  else if (V.gl) ajuster();
+};
 $("vue-copier").onclick = () => {
   if (V.sel >= 0) navigator.clipboard.writeText(V.faces[V.sel].nom);
 };
@@ -3142,6 +3145,10 @@ function apercuFeuille() {
 function planche(plan) {
   P.feuilles = plan.feuilles;
   $("plan-carte").style.display = "block";
+  // The ribbon's View group serves the drawing too: zoom to fit and full
+  // page, without isometric, which means nothing on a sheet.
+  $("ruban-orienter").hidden = false;
+  $("ruban-orienter").querySelector("[data-cube]").hidden = true;
   const onglets = $("plan-onglets");
   onglets.innerHTML = "";
   plan.feuilles.forEach((f, i) => {
@@ -3328,18 +3335,15 @@ $("journal-copier").onclick = (e) => {
 function pleinePage(carte, oui) {
   carte.classList.toggle("pleine-page", oui);
   document.body.classList.toggle("pleine-page", oui);
-  if (carte.id === "vue-carte") {
-    $("vue-plein").checked = oui;
-    if (V.gl) redessiner();
-  }
+  $("vue-plein").checked = oui;
+  if (carte.id === "vue-carte" && V.gl) redessiner();
 }
-$("vue-plein").onchange = () => pleinePage($("vue-carte"), $("vue-plein").checked);
-document.querySelectorAll(".plein").forEach((b) => {
-  b.onclick = () => {
-    const carte = $(b.dataset.cible);
-    pleinePage(carte, !carte.classList.contains("pleine-page"));
-  };
-});
+// One switch, in the View group: it enlarges what is shown, the 3D view or
+// the drawing.
+$("vue-plein").onchange = () => {
+  const carte = $("plan-carte").style.display === "block" ? $("plan-carte") : $("vue-carte");
+  pleinePage(carte, $("vue-plein").checked);
+};
 document.addEventListener("keydown", (e) => {
   const ouverte = document.querySelector(".carte.pleine-page");
   if (e.key === "Escape" && ouverte) pleinePage(ouverte, false);
