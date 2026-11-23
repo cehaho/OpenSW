@@ -99,8 +99,8 @@ function esquissesEnVue(liste, centre) {
 }
 
 // The labelled STEP, meshed: the same JSON as tools/vue3d.py returns,
-// sketches included when navigateur.lancer read some.
-async function mailler(octets, table, dire, esquisses) {
+// sketches and PMI included when navigateur.lancer read some.
+async function mailler(octets, table, dire, esquisses, pmi) {
   const t0 = performance.now();
   const o = await chargerOcct();
   const res = o.ReadStepFile(octets, {
@@ -148,6 +148,8 @@ async function mailler(octets, table, dire, esquisses) {
   if (inconnues) dire(`${inconnues} unnamed faces: their colour designates no face`, "note");
   const vue = { faces, corps: corpsMax, rayon: diagonale / 2, centre, sommets: base64(sommets) };
   if (esquisses && esquisses.length) vue.esquisses = esquissesEnVue(esquisses, centre);
+  // PMI keep their anchors in the model frame: the page moves them to the centre.
+  if (pmi && pmi.length) vue.pmi = pmi;
   return JSON.stringify(vue);
 }
 
@@ -184,7 +186,8 @@ onmessage = async (e) => {
       try {
         dire("3D view: loading OpenCASCADE (WebAssembly)", "step");
         const vue = await mailler(new Uint8Array(r.etiquete), JSON.parse(r.faces), dire,
-                                  r.esquisses ? JSON.parse(r.esquisses) : null);
+                                  r.esquisses ? JSON.parse(r.esquisses) : null,
+                                  r.pmi ? JSON.parse(r.pmi) : null);
         postMessage({ id, vue });
       } catch (échec) {
         dire(`3D view failed: ${échec.message || échec}`, "note");

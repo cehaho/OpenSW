@@ -571,6 +571,7 @@ def préparer_vue(job: Job) -> None:
     if vides:
         say(f"{vides} faces OpenCASCADE cannot mesh, not shown", "note")
     _esquisses_dans_la_vue(job, vue)
+    _pmi_dans_la_vue(job, vue)
     job.vue = json.dumps(vue).encode()
 
 
@@ -644,6 +645,38 @@ def _esquisses_dans_la_vue(job: Job, vue: dict) -> None:
         vue["esquisses"] = esquisses_en_vue(liste, vue["centre"])
 
 
+def lire_pmi(job: Job) -> list[dict] | None:
+    """The uploaded part's DimXpert annotations, placed on their features
+    (:func:`sldprt.dimxpert.pmi_en_vue`, mm in the model), under Pyodide
+    too. ``None`` when there are none: a read error does not break the
+    view."""
+    say = job.journal.say
+    if job.source is None or job.source.suffix.lower() != ".sldprt":
+        return None
+    try:
+        from sldprt.dimxpert import lire_dimxpert, pmi_en_vue
+
+        liste = pmi_en_vue(job.source)
+        total = sum(len(d.annotations) for d in lire_dimxpert(job.source)[:1])
+    except Exception as échec:
+        say(f"PMI: not read — {type(échec).__name__}: {échec}", "note")
+        return None
+    if not liste:
+        return None
+    say(f"PMI: {len(liste)} DimXpert annotations in the view"
+        + (f" ({total - len(liste)} with no point to place them)" if total > len(liste) else ""),
+        "ok")
+    return liste
+
+
+def _pmi_dans_la_vue(job: Job, vue: dict) -> None:
+    """PMI added to the view, anchors in the model frame: the page moves
+    them relative to ``vue["centre"]``."""
+    liste = lire_pmi(job)
+    if liste:
+        vue["pmi"] = liste
+
+
 HTML = r"""<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
@@ -686,14 +719,16 @@ HTML = r"""<!doctype html>
   }
   :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
-  main { max-width: 860px; margin: 0 auto; }
-  h1 { font-size: 20px; margin: 0 0 var(--s5); font-weight: 700;
+  main { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0; font-weight: 700; flex: 0 0 auto;
        display: flex; align-items: center; gap: var(--s3); }
   h1 > span:first-of-type { font-weight: 400; color: var(--muted); }
   h1 b { color: var(--text); font-weight: 700; }
-  #logo { width: 40px; height: 40px; flex: 0 0 auto; }
-  .langues { margin-left: auto; display: flex; gap: var(--s1); }
-  .langues button { flex: 0 0 auto; height: 26px; padding: 0 10px; font-size: 12px; }
+  #logo { width: 34px; height: 34px; flex: 0 0 auto; }
+  /* The six most spoken languages, two rows of three: the ribbon's height, not its width. */
+  .langues { margin-inline-start: auto; align-self: center;
+             display: grid; grid-template-columns: repeat(3, auto); gap: 4px; }
+  .langues button { flex: 0 0 auto; height: 24px; min-width: 32px; padding: 0 6px; font-size: 11.5px; }
   .langues button.choisi, .onglets button.choisi {
     background: var(--accent-soft); color: var(--accent); box-shadow: none;
     border-color: color-mix(in srgb, var(--accent) 40%, transparent);
@@ -733,8 +768,64 @@ HTML = r"""<!doctype html>
   button:hover:not(:disabled) { filter: brightness(1.04); }
   button:active:not(:disabled) { filter: none; box-shadow: inset 0 1px 3px rgba(0,0,0,.22); }
   button:disabled { opacity: .45; cursor: not-allowed; }
-  /* Export and download side by side, an icon and a word. */
-  #actions { display: flex; gap: var(--s2); margin-top: var(--s3); flex-wrap: wrap; }
+  /* The drop zone does not need the full width: the ribbon sits to its
+     right, below it when the window is narrow. */
+  #depot-ligne { display: flex; gap: var(--s4); align-items: center; flex-wrap: wrap; }
+  .carte:has(> #depot-ligne) { padding: var(--s3); }
+  #depot-ligne { align-items: stretch; }
+  #depot-ligne #depot {
+    flex: 0 0 auto; max-width: 260px; display: grid; grid-template-columns: auto minmax(0, 1fr);
+    column-gap: var(--s3); row-gap: 2px; align-content: center; text-align: left;
+    padding: var(--s3) var(--s4);
+  }
+  #depot-ligne #depot svg { grid-row: span 2; }
+  #depot-ligne #depot-nom { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #actions { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center; }
+  #actions button { flex: 0 0 auto; }
+  /* The ribbon: groups side by side, a quiet title above each, a rule
+     between them. */
+  #ruban { flex: 0 1 auto; display: flex; flex-wrap: wrap; align-items: stretch;
+           gap: var(--s2) 0; min-width: 0; }
+  .ruban-groupe { display: flex; flex-direction: column; justify-content: space-between;
+                  gap: 5px; padding-inline-end: var(--s3); }
+  .ruban-groupe:not([hidden]) ~ .ruban-groupe { border-inline-start: 1px solid var(--border);
+                                               padding-inline-start: var(--s3); }
+  .ruban-groupe:last-child { padding-inline-end: 0; }
+  .ruban-titre { color: var(--muted); font-size: 10.5px; font-weight: 600;
+                 text-transform: uppercase; letter-spacing: .05em; line-height: 1; }
+  #ruban .action { height: 30px; padding: 0 10px; font-size: 12px; }
+  #ruban .groupe { gap: 6px; }
+  /* The group title already says « File »; the sketches link says
+     « Sketches ». */
+  #ruban .groupe-titre { display: none !important; }
+  #ruban #groupe-esq { margin-left: 0; padding-left: 0; border-left: 0; }
+  #ruban #actions { gap: 6px; }
+  .ruban-ligne { display: flex; gap: var(--s3); align-items: center; flex-wrap: wrap;
+                 min-height: 32px; }
+  .ruban-ligne { gap: 6px; }
+  .ruban-ligne button { flex: 0 0 auto; height: 30px; padding: 0 10px; font-size: 12px; }
+  .ruban-ligne .icone-r { width: 30px; padding: 0; }
+  .icone-r svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7;
+                 stroke-linecap: round; stroke-linejoin: round; }
+  /* In the ribbon, a switch is a button that stays pressed. */
+  .ruban-ligne .interrupteur {
+    height: 30px; padding: 0 10px; font-size: 12px; font-weight: 500;
+    border: 1px solid color-mix(in srgb, var(--muted) 45%, transparent);
+    border-radius: var(--radius); background: var(--control);
+  }
+  .ruban-ligne .interrupteur .piste { display: none; }
+  .ruban-ligne .interrupteur:hover { border-color: var(--muted); }
+  .ruban-ligne .interrupteur:has(input:checked) {
+    background: var(--accent-soft); color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  .ruban-ligne .interrupteur:has(input:focus-visible) { box-shadow: 0 0 0 2px var(--focus-ring); }
+  /* Full page: the ribbon floats at the top right of the view. */
+  body.pleine-page #ruban {
+    position: fixed; top: var(--s2); right: var(--s2); z-index: 60; flex: none;
+    padding: var(--s2) var(--s3); background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); box-shadow: 0 4px 16px rgba(0,0,0,.18);
+  }
   #lien, #lien-esq { display: contents; }
   /* A group of outputs, its title first: "3D", then "Sketch" after a rule. */
   .groupe { display: inline-flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
@@ -882,6 +973,25 @@ HTML = r"""<!doctype html>
     position: absolute; left: 8px; bottom: 8px; width: 76px; height: 76px;
     pointer-events: none;
   }
+  /* The view cube, top left, bare: six CSS 3D faces. */
+  #vue-cube { position: absolute; left: 12px; top: 12px; z-index: 2; width: 92px;
+              display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .cube-scene { width: 92px; height: 92px; perspective: 520px;
+                display: grid; place-items: center; }
+  #vue-cube-corps { width: 56px; height: 56px; position: relative; transform-style: preserve-3d; }
+  #vue-cube-corps > div {
+    position: absolute; inset: 0; display: grid; place-items: center; cursor: pointer;
+    font-size: 9px; font-weight: 700; letter-spacing: .01em; text-transform: uppercase;
+    color: #4a5160; background: rgba(246,247,249,.94); border: 1px solid #8a93a3;
+    user-select: none; transition: background .12s, color .12s;
+  }
+  #vue-cube-corps > div:hover { background: #fbe0dd; color: #a8160f; border-color: var(--accent); }
+  .c-face { transform: translateZ(28px); }
+  .c-arriere { transform: rotateY(180deg) translateZ(28px); }
+  .c-droite { transform: rotateY(90deg) translateZ(28px); }
+  .c-gauche { transform: rotateY(-90deg) translateZ(28px); }
+  .c-dessus { transform: rotateX(90deg) translateZ(28px); }
+  .c-dessous { transform: rotateX(-90deg) translateZ(28px); }
   .vue-vues { display: flex; gap: 6px; flex-wrap: wrap; margin-top: var(--s3); }
   .vue-vues button { flex: 0 0 auto; height: 26px; padding: 0 10px; font-size: 12px; }
   .vue-barre {
@@ -920,19 +1030,10 @@ HTML = r"""<!doctype html>
   .interrupteur input:checked + .piste::after { transform: translateX(12px); background: #fff; }
   .interrupteur input:focus-visible + .piste { box-shadow: 0 0 0 2px var(--focus-ring); }
   .interrupteur input:disabled + .piste { opacity: .45; }
-  /* On the view, left of the full-page button, at its height, with the
-     buttons' « secondary » recipe. */
-  #vue-esq-bascule {
-    position: absolute; top: 8px; right: 40px; z-index: 2; height: 26px;
-    padding: 0 8px; border-radius: var(--radius); font-weight: 500;
-    background: linear-gradient(180deg, color-mix(in srgb, var(--raised) 92%, #fff),
-                                        color-mix(in srgb, var(--raised) 96%, #000));
-    border: 1px solid color-mix(in srgb, var(--muted) 45%, transparent);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 1px 1px rgba(0,0,0,.12);
-    transition: filter .12s;
+  /* PMI: a 2D layer over the view, which clicks go through. */
+  #vue-pmi {
+    position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
   }
-  #vue-esq-bascule:hover { filter: brightness(1.04); }
-  #vue-esq-bascule:active { box-shadow: inset 0 1px 3px rgba(0,0,0,.22); }
   /* On: the « primary » recipe, the downloads'. */
   .interrupteur input:checked + .piste {
     background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 90%, #fff) 0%,
@@ -970,27 +1071,28 @@ HTML = r"""<!doctype html>
 <main>
   <!-- Logo: the open box. Also used as the favicon (see below), so the page
        loads no file. -->
-  <h1><svg id="logo" viewBox="0 0 100 100" role="img" aria-label="openSW">
-    <defs>
-      <linearGradient id="logo-lueur" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#ff6a5c"/><stop offset="1" stop-color="#e1251b"/>
-      </linearGradient>
-    </defs>
-    <polygon points="19,44 50,62 50,94 19,76" fill="#6d6e71"/>
-    <polygon points="50,62 81,44 81,76 50,94" fill="#4d4e51"/>
-    <polygon points="19,44 50,26 81,44 50,62" fill="url(#logo-lueur)"
-             stroke="#1d1d1f" stroke-width="2"/>
-    <polygon points="19,24 50,6 81,24 50,42" fill="#e6e7e8" stroke="#1d1d1f"
-             stroke-width="2" transform="rotate(-8 50 24)"/>
-    <path d="M19,44 L50,62 L81,44 M50,62 L50,94" stroke="#1d1d1f" stroke-width="2"
-          fill="none"/>
-  </svg><span>open<b>SW</b></span>
-  <span class="langues"><button data-langue="fr">FR</button><button data-langue="en">EN</button></span></h1>
 
   <div class="carte">
     <!-- `convert.step` reads a Parasolid transmit file as well as a SolidWorks
          part, so .x_t is accepted too: comparing both outputs shows which
          one loses something. -->
+    <div id="depot-ligne">
+    <h1><svg id="logo" viewBox="0 0 100 100" role="img" aria-label="openSW">
+      <defs>
+        <linearGradient id="logo-lueur" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#ff6a5c"/><stop offset="1" stop-color="#e1251b"/>
+        </linearGradient>
+      </defs>
+      <polygon points="19,44 50,62 50,94 19,76" fill="#6d6e71"/>
+      <polygon points="50,62 81,44 81,76 50,94" fill="#4d4e51"/>
+      <polygon points="19,44 50,26 81,44 50,62" fill="url(#logo-lueur)"
+               stroke="#1d1d1f" stroke-width="2"/>
+      <polygon points="19,24 50,6 81,24 50,42" fill="#e6e7e8" stroke="#1d1d1f"
+               stroke-width="2" transform="rotate(-8 50 24)"/>
+      <path d="M19,44 L50,62 L81,44 M50,62 L50,94" stroke="#1d1d1f" stroke-width="2"
+            fill="none"/>
+    </svg><span>open<b>SW</b></span>
+</h1>
     <label id="depot">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
       <span><b data-t="depot">Drop a file</b> <span data-t="depot-ou">or click</span></span>
@@ -998,8 +1100,41 @@ HTML = r"""<!doctype html>
       <input type="file" id="fichier"
              multiple accept=".SLDPRT,.sldprt,.x_t,.X_T,.x_b,.X_B,.xmt_txt,.xmt_bin,.SLDDRW,.slddrw,.SLDASM,.sldasm,.zip,.ZIP">
     </label>
-    <!-- Shown by the published page only (statique.js): the local server
-         does receive the file. -->
+    <!-- A chosen file opens by itself (STEP, drawing or assembly); only the
+         .x_t export, which has no view, keeps a button. The ribbon holds
+         every button, in groups; the view's appear with it. -->
+    <div id="ruban">
+      <section class="ruban-groupe" id="ruban-fichier" hidden>
+        <div class="ruban-titre" data-t="r-fichier">File</div>
+        <div id="actions"><span class="groupe" id="groupe-3d"><span class="groupe-titre" hidden>3D</span><button id="btn-parasolid" class="action" hidden disabled
+        data-t-title="exporter-xt" title="Also export to Parasolid"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/></svg>.x_t</button><button id="btn-step-asm" class="action" hidden
+        data-t-title="step-asm" title="Export to STEP: pick the assembly's parts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/></svg>.STEP</button><input id="pieces-asm" type="file" multiple accept=".SLDPRT,.sldprt" hidden><span id="lien"></span></span><span class="groupe" id="groupe-esq" hidden><span class="groupe-titre" data-t="groupe-esq">Sketch</span><span id="lien-esq"></span></span></div>
+      </section>
+      <section class="ruban-groupe" id="ruban-vue" hidden>
+        <div class="ruban-titre" data-t="r-affichage">Display</div>
+        <div class="ruban-ligne">
+      <label class="interrupteur" id="vue-pmi-bascule" hidden><input type="checkbox" role="switch"
+        id="vue-pmi-voir"><span class="piste" aria-hidden="true"></span><span data-t="pmi">PMI</span></label>
+      <label class="interrupteur" id="vue-esq-bascule" hidden><input type="checkbox" role="switch"
+        id="vue-esq"><span class="piste" aria-hidden="true"></span><span data-t="esquisses">Sketches</span></label>
+      <label class="interrupteur" data-t-title="plein-écran" title="Full page (Esc to go back)"><input
+        type="checkbox" role="switch" id="vue-plein"><span class="piste" aria-hidden="true"></span><span
+        data-t="pleine-page">Full page</span></label>
+        </div>
+      </section>
+      <section class="ruban-groupe" id="ruban-orienter" hidden>
+        <div class="ruban-titre" data-t="r-vue">View</div>
+        <div class="ruban-ligne">
+          <button class="icone-r" data-cube="iso" data-t-title="vue-iso" title="Isometric"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 20 7.5v9L12 21l-8-4.5v-9ZM4 7.5l8 4.5 8-4.5M12 12v9"/></svg></button>
+          <button class="icone-r" id="vue-recadrer" data-t-title="zoom-mieux" title="Zoom to fit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg></button>
+        </div>
+      </section>
+    </div>
+    <span class="langues" role="group" aria-label="Langue · Language"><button data-langue="en" title="English">EN</button><button
+      data-langue="zh" title="中文">中文</button><button data-langue="hi" title="हिन्दी">हिं</button><button
+      data-langue="es" title="Español">ES</button><button data-langue="fr" title="Français">FR</button><button
+      data-langue="ar" title="العربية">ع</button></span>
+    </div>
     <!-- Examples fetched from GitHub, which allows it: NIST models (public domain)
          and a drawing from andyeske/How-to-CAD-Almost-Anything (MIT). -->
     <p id="exemples"><span data-t="exemples">No file at hand? Open an example:</span>
@@ -1016,11 +1151,6 @@ HTML = r"""<!doctype html>
       <div class="charge-piste"><div id="charge-barre"></div></div>
       <div id="charge-texte"></div>
     </div>
-    <!-- A chosen file opens by itself (STEP, drawing or assembly); only the
-         .x_t export, which has no view, keeps a button. -->
-    <div id="actions"><span class="groupe" id="groupe-3d"><span class="groupe-titre" hidden>3D</span><button id="btn-parasolid" class="action" hidden disabled
-        data-t-title="exporter-xt" title="Also export to Parasolid"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/></svg>.x_t</button><button id="btn-step-asm" class="action" hidden
-        data-t-title="step-asm" title="Export to STEP: pick the assembly's parts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/></svg>.STEP</button><input id="pieces-asm" type="file" multiple accept=".SLDPRT,.sldprt" hidden><span id="lien"></span></span><span class="groupe" id="groupe-esq" hidden><span class="groupe-titre" data-t="groupe-esq">Sketch</span><span id="lien-esq"></span></span></div>
   </div>
 
   <div id="espace">
@@ -1028,20 +1158,15 @@ HTML = r"""<!doctype html>
     <div class="vue-cadre">
       <canvas id="vue"></canvas>
       <canvas id="vue-triedre"></canvas>
-      <label class="interrupteur" id="vue-esq-bascule" hidden><input type="checkbox" role="switch"
-        id="vue-esq"><span class="piste" aria-hidden="true"></span><span data-t="esquisses">Sketches</span></label>
-      <button class="icone plein" data-cible="vue-carte" data-t-title="plein-écran"
-              title="Full page (Esc to go back)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
-    </div>
-    <div class="vue-vues">
-      <button data-vue="face" data-t="vue-face" title="Ctrl+1">Front</button>
-      <button data-vue="arrière" data-t="vue-arrière" title="Ctrl+2">Back</button>
-      <button data-vue="gauche" data-t="vue-gauche" title="Ctrl+3">Left</button>
-      <button data-vue="droite" data-t="vue-droite" title="Ctrl+4">Right</button>
-      <button data-vue="dessus" data-t="vue-dessus" title="Ctrl+5">Top</button>
-      <button data-vue="dessous" data-t="vue-dessous" title="Ctrl+6">Bottom</button>
-      <button data-vue="iso" data-t="vue-iso" title="Ctrl+7">Isometric</button>
-      <button id="vue-recadrer" data-t="zoom-mieux" title="F">Zoom to fit</button>
+      <div id="vue-cube"><div class="cube-scene"><div id="vue-cube-corps">
+        <div data-cube="face" class="c-face" data-t="vue-face">Front</div>
+        <div data-cube="arrière" class="c-arriere" data-t="vue-arrière">Back</div>
+        <div data-cube="droite" class="c-droite" data-t="vue-droite">Right</div>
+        <div data-cube="gauche" class="c-gauche" data-t="vue-gauche">Left</div>
+        <div data-cube="dessus" class="c-dessus" data-t="vue-dessus">Top</div>
+        <div data-cube="dessous" class="c-dessous" data-t="vue-dessous">Bottom</div>
+      </div></div></div>
+      <canvas id="vue-pmi"></canvas>
     </div>
     <div class="vue-barre">
       <span id="vue-info" class="vide" data-t="aide-vue">Click: select a face and read its name.
@@ -1119,7 +1244,9 @@ const TEXTES = {
     "vue-face": "Face", "vue-arrière": "Arrière", "vue-gauche": "Gauche",
     "vue-droite": "Droite", "vue-dessus": "Dessus", "vue-dessous": "Dessous",
     "vue-iso": "Isométrique", "zoom-mieux": "Zoom au mieux",
-    esquisses: "Esquisses", "groupe-esq": "Esquisse",
+    esquisses: "Esquisses", "groupe-esq": "Esquisse", pmi: "PMI",
+    "r-fichier": "Fichier", "r-affichage": "Affichage", "r-vue": "Vue",
+    "pmi-info": (n, f, c) => `${n} — ${f} : ${c}`,
     "esq-info": (n, f) => f ? `${n} — ${f}` : `${n} (esquisse libre)`,
     "aide-vue": "Clic : choisir une face et lire son nom. Bouton du milieu : " +
       "tourner · Ctrl+milieu : déplacer · Maj+milieu ou molette : zoomer · " +
@@ -1130,7 +1257,7 @@ const TEXTES = {
     "svg-feuille": "Télécharger la feuille affichée en SVG",
     "journal-vide": "Le journal s'écrira ici.",
     journal: "Journal", "copier-journal": "Copier le journal", copié: "copié",
-    "plein-écran": "Pleine page (Échap pour revenir)",
+    "plein-écran": "Pleine page (Échap pour revenir)", "pleine-page": "Pleine page",
     libre: "logiciel libre sous licence",
     marques: "sans lien avec Dassault Systèmes ; SolidWorks et Parasolid sont " +
       "des marques de leurs propriétaires.",
@@ -1201,7 +1328,9 @@ const TEXTES = {
     "vue-face": "Front", "vue-arrière": "Back", "vue-gauche": "Left",
     "vue-droite": "Right", "vue-dessus": "Top", "vue-dessous": "Bottom",
     "vue-iso": "Isometric", "zoom-mieux": "Zoom to fit",
-    esquisses: "Sketches", "groupe-esq": "Sketch",
+    esquisses: "Sketches", "groupe-esq": "Sketch", pmi: "PMI",
+    "r-fichier": "File", "r-affichage": "Display", "r-vue": "View",
+    "pmi-info": (n, f, c) => `${n} — ${f}: ${c}`,
     "esq-info": (n, f) => f ? `${n} — ${f}` : `${n} (free sketch)`,
     "aide-vue": "Click: select a face and read its name. Middle button: rotate · " +
       "Ctrl+middle: pan · Shift+middle or wheel: zoom · Alt+middle: roll · " +
@@ -1211,7 +1340,7 @@ const TEXTES = {
     "svg-feuille": "Download the shown sheet as SVG",
     "journal-vide": "The log will appear here.",
     journal: "Log", "copier-journal": "Copy the log", copié: "copied",
-    "plein-écran": "Full page (Esc to go back)",
+    "plein-écran": "Full page (Esc to go back)", "pleine-page": "Full page",
     libre: "free software under the",
     marques: "not affiliated with Dassault Systèmes; SolidWorks and Parasolid " +
       "are trademarks of their respective owners.",
@@ -1269,25 +1398,365 @@ const TEXTES = {
     genres: { line: "segment", circle: "circle", path: "arc", polygon: "polygon",
               polyline: "edge", text: "text" },
   },
+  es: {
+    titre: "openSW — piezas, ensamblajes y dibujos de SolidWorks",
+    local: "Su archivo no se envía a ningún servidor: se lee y se convierte " +
+      "en su navegador.",
+    exemples: "¿No tiene un archivo a mano? Abra un ejemplo:",
+    "ex-piece": "Pieza NIST", "ex-asm": "Ensamblaje NIST", "ex-plan": "Dibujo LEGO",
+    "ex-charge": (n) => `Descargando el ejemplo ${n}`,
+    "svg-feuille": "Descargar la hoja mostrada en SVG",
+    depot: "Suelte un archivo", "depot-ou": "o haga clic",
+    "exporter-xt": "Exportar también a Parasolid",
+    télécharger: (n) => `Descargar ${n}`,
+    "télécharger-esq": (n) => `Descargar ${n} — solo los croquis, sin el sólido`,
+    "vue-face": "Frontal", "vue-arrière": "Posterior", "vue-gauche": "Izquierda",
+    "vue-droite": "Derecha", "vue-dessus": "Superior", "vue-dessous": "Inferior",
+    "vue-iso": "Isométrica", "zoom-mieux": "Ajustar a la vista",
+    esquisses: "Croquis", "groupe-esq": "Croquis", pmi: "PMI",
+    "r-fichier": "Archivo", "r-affichage": "Mostrar", "r-vue": "Vista",
+    "pmi-info": (n, f, c) => `${n} — ${f}: ${c}`,
+    "esq-info": (n, f) => f ? `${n} — ${f}` : `${n} (croquis libre)`,
+    "aide-vue": "Clic: seleccionar una cara y leer su nombre. Botón central: girar · " +
+      "Ctrl+central: desplazar · Mayús+central o rueda: zoom · Alt+central: rodar · " +
+      "doble clic central o F: ajustar · flechas: 15°, Mayús: 90°.",
+    "aide-plan": "Haga clic en una línea para leer su nombre. Arrastrar: desplazar · rueda: zoom.",
+    copier: "Copiar nombre", trouver: "Buscar", recadrer: "Ajustar",
+    "journal-vide": "El registro aparecerá aquí.",
+    journal: "Registro", "copier-journal": "Copiar el registro", copié: "copiado",
+    "plein-écran": "Página completa (Esc para volver)", "pleine-page": "Página completa",
+    libre: "software libre bajo la licencia",
+    marques: "sin relación con Dassault Systèmes; SolidWorks y Parasolid " +
+      "son marcas de sus respectivos propietarios.",
+    envoi: (p) => `Enviando — ${p} %`,
+    lecture: "Leyendo el archivo",
+    "aff-vue": (s) => `Mostrando la vista 3D — ${s} s`,
+    "aff-plan": (s) => `Mostrando el dibujo — ${s} s`,
+    "serveur-répond": (c) => `el servidor respondió ${c}`,
+    "envoi-coupé": "envío interrumpido",
+    "pas-webgl": "Este navegador no tiene WebGL: sin vista 3D.",
+    "vue-prête": (f, c) => `${f} caras, ${c} ${c > 1 ? "cuerpos" : "cuerpo"}. ` +
+      "Haga clic en una cara para leer su nombre.",
+    "aucune-face": "Ninguna cara seleccionada.",
+    "face-info": (c, t) => ` · cuerpo ${c} · ${t} triángulos`,
+    "pas-pièce": (n) => `${n}: no está en esta pieza.`,
+    "feuille-info": (n, e, v) => `${n}: ${e} elementos, ${v} vista(s). ` +
+      "Haga clic en una línea para leer su nombre.",
+    "aucun-trait": "Ninguna línea bajo el ratón.",
+    "pas-plan": (n) => `${n}: no está en este dibujo.`,
+    "step-asm": "Exportar a STEP: elegir las piezas del ensamblaje",
+    fiche: "Propiedades del archivo",
+    "fiche-note": "Lo que el archivo dice de sí mismo, leído tal cual: nada se calcula.",
+    "r-titre": "Título", "r-sujet": "Asunto", "r-auteur": "Autor",
+    "r-mots_cles": "Palabras clave", "r-commentaires": "Comentarios",
+    "f-cree": "Creado", "f-enregistre": "Guardado", "f-par": "Guardado por",
+    "f-perso": "Propiedades personalizadas", "f-config": (n) => `Configuración «${n}»`,
+    "f-geo": (oui) => oui ? "geometría guardada en el archivo"
+                          : "geometría no guardada en el archivo",
+    "f-materiau": "Material", "f-densite": "densidad",
+    "f-masse": "Masa", "f-volume": "Volumen", "f-aire": "Área",
+    "f-centre": "Centro de masa",
+    "f-masse-note": "escritas por SolidWorks porque una propiedad está vinculada a ellas",
+    "h-qte": "Cant.", "h-fichier": "Archivo", "h-config": "Configuración",
+    "h-materiau": "Material", "h-composant": "Componente", "h-etat": "Estado",
+    "h-nom": "Nombre", "h-type": "Tipo", "h-valeur": "Valor", "h-tolerance": "Tolerancia",
+    "h-composants": "Componentes",
+    "f-nomenclature": "Lista de materiales", "f-composants": "Componentes",
+    "f-cache": "oculto", "f-supprime": "suprimido, fuera de la lista",
+    "f-hors": "excluido de la lista",
+    "f-inertie": "Inercia en el centro de masa",
+    "f-liens": "Textos vinculados",
+    "f-general": "General",
+    "f-export-csv": "Exportar las propiedades en CSV, una línea por valor",
+    "f-export-json": "Exportar todo lo leído, en JSON",
+    "f-cotes": "Cotas",
+    "f-contraintes": "Relaciones de posición", "m-0": "coincidente", "m-5": "distancia",
+    "f-csv": "Descargar la lista de componentes en CSV",
+    "apercu-agrandir": "Mostrar las vistas previas a su tamaño guardado",
+    "apercu-png": "PreviewPNG, la vista previa PNG",
+    "apercu-dib": "Preview, el mapa de bits de Windows (256 colores)",
+    "feuille-sans-image": "SolidWorks no guardó imagen de esta hoja: vista previa del archivo",
+    fermer: "Cerrar",
+    plusieurs: "Varios archivos: suelte un ensamblaje (.SLDASM) con sus piezas, o un dibujo (.SLDDRW) con sus ensamblajes.",
+    corps: "cuerpo",
+    genres: { line: "segmento", circle: "círculo", path: "arco", polygon: "polígono",
+              polyline: "arista", text: "texto" },
+  },
+  zh: {
+    titre: "openSW — SolidWorks 零件、装配体和工程图",
+    local: "您的文件不会上传到任何服务器：它在您的浏览器中读取和转换。",
+    exemples: "手头没有文件？打开一个示例：",
+    "ex-piece": "NIST 零件", "ex-asm": "NIST 装配体", "ex-plan": "LEGO 工程图",
+    "ex-charge": (n) => `正在下载示例 ${n}`,
+    "svg-feuille": "将当前图纸下载为 SVG",
+    depot: "拖放文件", "depot-ou": "或点击",
+    "exporter-xt": "同时导出为 Parasolid",
+    télécharger: (n) => `下载 ${n}`,
+    "télécharger-esq": (n) => `下载 ${n} — 仅草图，不含实体`,
+    "vue-face": "前视", "vue-arrière": "后视", "vue-gauche": "左视",
+    "vue-droite": "右视", "vue-dessus": "上视", "vue-dessous": "下视",
+    "vue-iso": "等轴测", "zoom-mieux": "整屏显示",
+    esquisses: "草图", "groupe-esq": "草图", pmi: "PMI",
+    "r-fichier": "文件", "r-affichage": "显示", "r-vue": "视图",
+    "pmi-info": (n, f, c) => `${n} — ${f}：${c}`,
+    "esq-info": (n, f) => f ? `${n} — ${f}` : `${n}（独立草图）`,
+    "aide-vue": "单击：选择一个面并读取其名称。中键：旋转 · Ctrl+中键：平移 · " +
+      "Shift+中键或滚轮：缩放 · Alt+中键：滚转 · 双击中键或 F：整屏显示 · " +
+      "方向键：15°，Shift：90°。",
+    "aide-plan": "单击线条以读取其名称。拖动：平移 · 滚轮：缩放。",
+    copier: "复制名称", trouver: "查找", recadrer: "适应",
+    "journal-vide": "日志将显示在这里。",
+    journal: "日志", "copier-journal": "复制日志", copié: "已复制",
+    "plein-écran": "全页（按 Esc 返回）", "pleine-page": "全页",
+    libre: "自由软件，许可证为",
+    marques: "与 Dassault Systèmes 无关；SolidWorks 和 Parasolid 是其各自所有者的商标。",
+    envoi: (p) => `正在上传 — ${p} %`,
+    lecture: "正在读取文件",
+    "aff-vue": (s) => `正在显示 3D 视图 — ${s} 秒`,
+    "aff-plan": (s) => `正在显示工程图 — ${s} 秒`,
+    "serveur-répond": (c) => `服务器返回 ${c}`,
+    "envoi-coupé": "上传中断",
+    "pas-webgl": "此浏览器不支持 WebGL：无法显示 3D 视图。",
+    "vue-prête": (f, c) => `${f} 个面，${c} 个实体。单击一个面以读取其名称。`,
+    "aucune-face": "未选择面。",
+    "face-info": (c, t) => ` · 实体 ${c} · ${t} 个三角形`,
+    "pas-pièce": (n) => `${n}：不在此零件中。`,
+    "feuille-info": (n, e, v) => `${n}：${e} 个元素，${v} 个视图。单击线条以读取其名称。`,
+    "aucun-trait": "鼠标下没有线条。",
+    "pas-plan": (n) => `${n}：不在此工程图中。`,
+    "step-asm": "导出为 STEP：选择装配体的零件",
+    fiche: "文件属性",
+    "fiche-note": "文件对自身的描述，按原样读取：不做任何计算。",
+    "r-titre": "标题", "r-sujet": "主题", "r-auteur": "作者",
+    "r-mots_cles": "关键词", "r-commentaires": "备注",
+    "f-cree": "创建时间", "f-enregistre": "保存时间", "f-par": "保存者",
+    "f-perso": "自定义属性", "f-config": (n) => `配置“${n}”`,
+    "f-geo": (oui) => oui ? "几何体已保存在文件中" : "几何体未保存在文件中",
+    "f-materiau": "材料", "f-densite": "密度",
+    "f-masse": "质量", "f-volume": "体积", "f-aire": "面积",
+    "f-centre": "质心",
+    "f-masse-note": "由 SolidWorks 写入，因为有属性引用了它们",
+    "h-qte": "数量", "h-fichier": "文件", "h-config": "配置",
+    "h-materiau": "材料", "h-composant": "零部件", "h-etat": "状态",
+    "h-nom": "名称", "h-type": "类型", "h-valeur": "值", "h-tolerance": "公差",
+    "h-composants": "零部件",
+    "f-nomenclature": "材料明细表", "f-composants": "零部件",
+    "f-cache": "隐藏", "f-supprime": "已压缩，不计入明细表",
+    "f-hors": "不计入明细表",
+    "f-inertie": "质心处的惯性",
+    "f-liens": "链接文本",
+    "f-general": "常规",
+    "f-export-csv": "将属性导出为 CSV，每个值一行",
+    "f-export-json": "将读取的全部内容导出为 JSON",
+    "f-cotes": "尺寸",
+    "f-contraintes": "配合", "m-0": "重合", "m-5": "距离",
+    "f-csv": "将零部件列表下载为 CSV",
+    "apercu-agrandir": "按保存尺寸显示预览图",
+    "apercu-png": "PreviewPNG，PNG 预览图",
+    "apercu-dib": "Preview，Windows 位图（256 色）",
+    "feuille-sans-image": "SolidWorks 未保存此图纸的图像：文件预览图",
+    fermer: "关闭",
+    plusieurs: "多个文件：拖放一个装配体（.SLDASM）及其零件，或一个工程图（.SLDDRW）及其装配体。",
+    corps: "实体",
+    genres: { line: "线段", circle: "圆", path: "圆弧", polygon: "多边形",
+              polyline: "边线", text: "文字" },
+  },
+  hi: {
+    titre: "openSW — SolidWorks पार्ट, असेंबली और ड्रॉइंग",
+    local: "आपकी फ़ाइल किसी सर्वर पर नहीं भेजी जाती: वह आपके ब्राउज़र में ही पढ़ी और बदली जाती है।",
+    exemples: "पास में कोई फ़ाइल नहीं? एक उदाहरण खोलें:",
+    "ex-piece": "NIST पार्ट", "ex-asm": "NIST असेंबली", "ex-plan": "LEGO ड्रॉइंग",
+    "ex-charge": (n) => `उदाहरण ${n} डाउनलोड हो रहा है`,
+    "svg-feuille": "दिखाई गई शीट SVG में डाउनलोड करें",
+    depot: "फ़ाइल यहाँ छोड़ें", "depot-ou": "या क्लिक करें",
+    "exporter-xt": "Parasolid में भी निर्यात करें",
+    télécharger: (n) => `${n} डाउनलोड करें`,
+    "télécharger-esq": (n) => `${n} डाउनलोड करें — केवल स्केच, ठोस के बिना`,
+    "vue-face": "सामने", "vue-arrière": "पीछे", "vue-gauche": "बाएँ",
+    "vue-droite": "दाएँ", "vue-dessus": "ऊपर", "vue-dessous": "नीचे",
+    "vue-iso": "आइसोमेट्रिक", "zoom-mieux": "पूरा दिखाएँ",
+    esquisses: "स्केच", "groupe-esq": "स्केच", pmi: "PMI",
+    "r-fichier": "फ़ाइल", "r-affichage": "प्रदर्शन", "r-vue": "दृश्य",
+    "pmi-info": (n, f, c) => `${n} — ${f}: ${c}`,
+    "esq-info": (n, f) => f ? `${n} — ${f}` : `${n} (स्वतंत्र स्केच)`,
+    "aide-vue": "क्लिक: एक सतह चुनें और उसका नाम पढ़ें। बीच का बटन: घुमाएँ · " +
+      "Ctrl+बीच: खिसकाएँ · Shift+बीच या व्हील: ज़ूम · Alt+बीच: लुढ़काएँ · " +
+      "बीच का डबल-क्लिक या F: पूरा दिखाएँ · तीर: 15°, Shift: 90°।",
+    "aide-plan": "रेखा का नाम पढ़ने के लिए उस पर क्लिक करें। खींचें: खिसकाएँ · व्हील: ज़ूम।",
+    copier: "नाम कॉपी करें", trouver: "खोजें", recadrer: "फ़िट करें",
+    "journal-vide": "लॉग यहाँ दिखाई देगा।",
+    journal: "लॉग", "copier-journal": "लॉग कॉपी करें", copié: "कॉपी हो गया",
+    "plein-écran": "पूरा पेज (वापस जाने के लिए Esc)", "pleine-page": "पूरा पेज",
+    libre: "मुक्त सॉफ़्टवेयर, लाइसेंस:",
+    marques: "Dassault Systèmes से संबद्ध नहीं; SolidWorks और Parasolid अपने-अपने " +
+      "स्वामियों के ट्रेडमार्क हैं।",
+    envoi: (p) => `भेजा जा रहा है — ${p} %`,
+    lecture: "फ़ाइल पढ़ी जा रही है",
+    "aff-vue": (s) => `3D दृश्य दिखाया जा रहा है — ${s} से.`,
+    "aff-plan": (s) => `ड्रॉइंग दिखाई जा रही है — ${s} से.`,
+    "serveur-répond": (c) => `सर्वर ने ${c} लौटाया`,
+    "envoi-coupé": "भेजना बीच में रुक गया",
+    "pas-webgl": "इस ब्राउज़र में WebGL नहीं है: 3D दृश्य उपलब्ध नहीं।",
+    "vue-prête": (f, c) => `${f} सतहें, ${c} ठोस। किसी सतह का नाम पढ़ने के लिए उस पर क्लिक करें।`,
+    "aucune-face": "कोई सतह नहीं चुनी गई।",
+    "face-info": (c, t) => ` · ठोस ${c} · ${t} त्रिभुज`,
+    "pas-pièce": (n) => `${n}: इस पार्ट में नहीं है।`,
+    "feuille-info": (n, e, v) => `${n}: ${e} तत्व, ${v} दृश्य। रेखा का नाम पढ़ने के लिए उस पर क्लिक करें।`,
+    "aucun-trait": "माउस के नीचे कोई रेखा नहीं।",
+    "pas-plan": (n) => `${n}: इस ड्रॉइंग में नहीं है।`,
+    "step-asm": "STEP में निर्यात करें: असेंबली के पार्ट चुनें",
+    fiche: "फ़ाइल गुण",
+    "fiche-note": "फ़ाइल अपने बारे में जो कहती है, वैसा ही पढ़ा गया: कुछ भी गणना नहीं की गई।",
+    "r-titre": "शीर्षक", "r-sujet": "विषय", "r-auteur": "लेखक",
+    "r-mots_cles": "कीवर्ड", "r-commentaires": "टिप्पणियाँ",
+    "f-cree": "बनाया गया", "f-enregistre": "सहेजा गया", "f-par": "सहेजने वाले",
+    "f-perso": "कस्टम गुण", "f-config": (n) => `कॉन्फ़िगरेशन "${n}"`,
+    "f-geo": (oui) => oui ? "ज्यामिति फ़ाइल में सहेजी गई है"
+                          : "ज्यामिति फ़ाइल में सहेजी नहीं गई",
+    "f-materiau": "सामग्री", "f-densite": "घनत्व",
+    "f-masse": "द्रव्यमान", "f-volume": "आयतन", "f-aire": "क्षेत्रफल",
+    "f-centre": "द्रव्यमान केंद्र",
+    "f-masse-note": "SolidWorks ने लिखे क्योंकि कोई गुण इनसे जुड़ा है",
+    "h-qte": "संख्या", "h-fichier": "फ़ाइल", "h-config": "कॉन्फ़िगरेशन",
+    "h-materiau": "सामग्री", "h-composant": "घटक", "h-etat": "स्थिति",
+    "h-nom": "नाम", "h-type": "प्रकार", "h-valeur": "मान", "h-tolerance": "टॉलरेंस",
+    "h-composants": "घटक",
+    "f-nomenclature": "सामग्री सूची", "f-composants": "घटक",
+    "f-cache": "छिपा हुआ", "f-supprime": "दबाया गया, सूची से बाहर",
+    "f-hors": "सूची से बाहर",
+    "f-inertie": "द्रव्यमान केंद्र पर जड़त्व",
+    "f-liens": "जुड़े हुए पाठ",
+    "f-general": "सामान्य",
+    "f-export-csv": "गुण CSV में निर्यात करें, हर मान एक पंक्ति",
+    "f-export-json": "पढ़ा गया सब कुछ JSON में निर्यात करें",
+    "f-cotes": "आयाम",
+    "f-contraintes": "मेट", "m-0": "संपाती", "m-5": "दूरी",
+    "f-csv": "घटकों की सूची CSV में डाउनलोड करें",
+    "apercu-agrandir": "पूर्वावलोकन उनके सहेजे आकार में दिखाएँ",
+    "apercu-png": "PreviewPNG, PNG पूर्वावलोकन",
+    "apercu-dib": "Preview, Windows बिटमैप (256 रंग)",
+    "feuille-sans-image": "SolidWorks ने इस शीट की कोई छवि नहीं रखी: फ़ाइल का पूर्वावलोकन",
+    fermer: "बंद करें",
+    plusieurs: "कई फ़ाइलें: एक असेंबली (.SLDASM) उसके पार्ट के साथ, या एक ड्रॉइंग (.SLDDRW) उसकी असेंबली के साथ छोड़ें।",
+    corps: "ठोस",
+    genres: { line: "रेखाखंड", circle: "वृत्त", path: "चाप", polygon: "बहुभुज",
+              polyline: "किनारा", text: "पाठ" },
+  },
+  ar: {
+    titre: "openSW — قطع وتجميعات ورسومات SolidWorks",
+    local: "لا يُرسَل ملفك إلى أي خادم: يُقرأ ويُحوَّل داخل متصفحك.",
+    exemples: "ليس لديك ملف؟ افتح مثالًا:",
+    "ex-piece": "قطعة NIST", "ex-asm": "تجميعة NIST", "ex-plan": "رسم LEGO",
+    "ex-charge": (n) => `جارٍ تنزيل المثال ${n}`,
+    "svg-feuille": "تنزيل الورقة المعروضة بصيغة SVG",
+    depot: "أفلت ملفًا هنا", "depot-ou": "أو انقر",
+    "exporter-xt": "التصدير أيضًا إلى Parasolid",
+    télécharger: (n) => `تنزيل ${n}`,
+    "télécharger-esq": (n) => `تنزيل ${n} — الرسومات التخطيطية فقط، دون المجسم`,
+    "vue-face": "أمامي", "vue-arrière": "خلفي", "vue-gauche": "يسار",
+    "vue-droite": "يمين", "vue-dessus": "علوي", "vue-dessous": "سفلي",
+    "vue-iso": "متساوي القياس", "zoom-mieux": "ملاءمة العرض",
+    esquisses: "المخططات", "groupe-esq": "مخطط", pmi: "PMI",
+    "r-fichier": "ملف", "r-affichage": "عرض", "r-vue": "منظور",
+    "pmi-info": (n, f, c) => `${n} — ${f}: ${c}`,
+    "esq-info": (n, f) => f ? `${n} — ${f}` : `${n} (رسم تخطيطي حر)`,
+    "aide-vue": "نقرة: اختر وجهًا واقرأ اسمه. الزر الأوسط: تدوير · " +
+      "Ctrl+الأوسط: تحريك · Shift+الأوسط أو العجلة: تكبير · Alt+الأوسط: لفّ · " +
+      "نقرة مزدوجة بالأوسط أو F: ملاءمة · الأسهم: 15°، Shift: 90°.",
+    "aide-plan": "انقر على خط لقراءة اسمه. السحب: تحريك · العجلة: تكبير.",
+    copier: "نسخ الاسم", trouver: "بحث", recadrer: "ملاءمة",
+    "journal-vide": "سيظهر السجل هنا.",
+    journal: "السجل", "copier-journal": "نسخ السجل", copié: "تم النسخ",
+    "plein-écran": "صفحة كاملة (Esc للعودة)", "pleine-page": "صفحة كاملة",
+    libre: "برنامج حر بموجب رخصة",
+    marques: "لا علاقة له بـ Dassault Systèmes؛ SolidWorks وParasolid " +
+      "علامتان تجاريتان لمالكيهما.",
+    envoi: (p) => `جارٍ الإرسال — ${p} %`,
+    lecture: "جارٍ قراءة الملف",
+    "aff-vue": (s) => `جارٍ عرض المنظور ثلاثي الأبعاد — ${s} ث`,
+    "aff-plan": (s) => `جارٍ عرض الرسم — ${s} ث`,
+    "serveur-répond": (c) => `ردّ الخادم بـ ${c}`,
+    "envoi-coupé": "انقطع الإرسال",
+    "pas-webgl": "هذا المتصفح لا يدعم WebGL: لا يوجد عرض ثلاثي الأبعاد.",
+    "vue-prête": (f, c) => `${f} وجهًا، ${c} مجسم. انقر على وجه لقراءة اسمه.`,
+    "aucune-face": "لم يُختر أي وجه.",
+    "face-info": (c, t) => ` · المجسم ${c} · ${t} مثلثًا`,
+    "pas-pièce": (n) => `${n}: غير موجود في هذه القطعة.`,
+    "feuille-info": (n, e, v) => `${n}: ${e} عنصرًا، ${v} منظور. انقر على خط لقراءة اسمه.`,
+    "aucun-trait": "لا يوجد خط تحت المؤشر.",
+    "pas-plan": (n) => `${n}: غير موجود في هذا الرسم.`,
+    "step-asm": "التصدير إلى STEP: اختر قطع التجميعة",
+    fiche: "خصائص الملف",
+    "fiche-note": "ما يقوله الملف عن نفسه، مقروءًا كما هو: لا يُحسب شيء.",
+    "r-titre": "العنوان", "r-sujet": "الموضوع", "r-auteur": "المؤلف",
+    "r-mots_cles": "الكلمات المفتاحية", "r-commentaires": "التعليقات",
+    "f-cree": "أُنشئ", "f-enregistre": "حُفظ", "f-par": "حفظه",
+    "f-perso": "خصائص مخصصة", "f-config": (n) => `التكوين «${n}»`,
+    "f-geo": (oui) => oui ? "الهندسة محفوظة في الملف" : "الهندسة غير محفوظة في الملف",
+    "f-materiau": "المادة", "f-densite": "الكثافة",
+    "f-masse": "الكتلة", "f-volume": "الحجم", "f-aire": "المساحة",
+    "f-centre": "مركز الكتلة",
+    "f-masse-note": "كتبها SolidWorks لأن خاصيةً ترتبط بها",
+    "h-qte": "الكمية", "h-fichier": "الملف", "h-config": "التكوين",
+    "h-materiau": "المادة", "h-composant": "المكوّن", "h-etat": "الحالة",
+    "h-nom": "الاسم", "h-type": "النوع", "h-valeur": "القيمة", "h-tolerance": "التفاوت",
+    "h-composants": "المكوّنات",
+    "f-nomenclature": "قائمة المواد", "f-composants": "المكوّنات",
+    "f-cache": "مخفي", "f-supprime": "مُعطَّل، خارج القائمة",
+    "f-hors": "مستبعد من القائمة",
+    "f-inertie": "العطالة عند مركز الكتلة",
+    "f-liens": "نصوص مرتبطة",
+    "f-general": "عام",
+    "f-export-csv": "تصدير الخصائص بصيغة CSV، سطر لكل قيمة",
+    "f-export-json": "تصدير كل ما قُرئ بصيغة JSON",
+    "f-cotes": "الأبعاد",
+    "f-contraintes": "قيود التجميع", "m-0": "متطابق", "m-5": "مسافة",
+    "f-csv": "تنزيل قائمة المكوّنات بصيغة CSV",
+    "apercu-agrandir": "عرض المعاينات بحجمها المحفوظ",
+    "apercu-png": "PreviewPNG، معاينة PNG",
+    "apercu-dib": "Preview، صورة Windows النقطية (256 لونًا)",
+    "feuille-sans-image": "لم يحفظ SolidWorks صورة لهذه الورقة: معاينة الملف",
+    fermer: "إغلاق",
+    plusieurs: "عدة ملفات: أفلت تجميعة (.SLDASM) مع قطعها، أو رسمًا (.SLDDRW) مع تجميعاته.",
+    corps: "مجسم",
+    genres: { line: "قطعة مستقيمة", circle: "دائرة", path: "قوس", polygon: "مضلع",
+              polyline: "حافة", text: "نص" },
+  },
 };
 
 let LANGUE = "en";
 try { LANGUE = localStorage.getItem("opensw-langue") || ""; } catch (e) { LANGUE = ""; }
-if (!TEXTES[LANGUE]) LANGUE = "en";
+if (!TEXTES[LANGUE]) {
+  const nav = (navigator.language || "").slice(0, 2).toLowerCase();
+  LANGUE = TEXTES[nav] ? nav : "en";
+}
 
 function t(clé, ...args) {
-  const v = TEXTES[LANGUE][clé] ?? TEXTES.en[clé];
+  const v = TEXTES[LANGUE][clé] ?? TEXTES.en[clé] ?? TEXTES.fr[clé];
   return typeof v === "function" ? v(...args) : v;
 }
 
+// The properties shown, to rewrite them in a language chosen later.
+let ficheMontrée = null;
+
 function traduire() {
   document.documentElement.lang = LANGUE;
+  // Arabic is written right to left; the 3D view does not flip.
+  document.documentElement.dir = LANGUE === "ar" ? "rtl" : "ltr";
   document.title = t("titre");
   document.querySelectorAll("[data-t]").forEach((e) => { e.textContent = t(e.dataset.t); });
   document.querySelectorAll("[data-t-title]").forEach((e) => { e.title = t(e.dataset.tTitle); });
   document.querySelectorAll("[data-langue]").forEach((b) => {
     b.classList.toggle("choisi", b.dataset.langue === LANGUE);
   });
+  if (ficheMontrée) {
+    // Sections keep their state, open or folded.
+    const ouvertes = [...$("fiche-table").querySelectorAll("details")].map((d) => d.open);
+    fiche(ficheMontrée);
+    $("fiche-table").querySelectorAll("details").forEach((d, i) => {
+      if (i < ouvertes.length) d.open = ouvertes[i];
+    });
+  }
 }
 
 document.querySelectorAll("[data-langue]").forEach((b) => {
@@ -1332,7 +1801,9 @@ function actifs(oui) {
   // Drawings and assemblies are viewed, not converted.
   const plan = prêt && /\.slddrw$/i.test(f.name);
   const asm = prêt && /\.sldasm$/i.test(f.name);
-  $("btn-parasolid").hidden = !f || plan || asm;
+  // Once the .x_t is written, its download link takes the button's place.
+  const xtPrêt = !!$("lien").querySelector("a.sortie-xt");
+  $("btn-parasolid").hidden = !f || plan || asm || xtPrêt;
   $("btn-parasolid").disabled = !prêt || plan || asm;
   $("btn-step-asm").hidden = !asm;
   $("btn-step-asm").disabled = !prêt;
@@ -1346,6 +1817,9 @@ function grouper() {
   g.querySelector(".groupe-titre").hidden =
     !g.querySelector("#btn-parasolid:not([hidden]), #btn-step-asm:not([hidden]), a.sortie-3d");
   $("groupe-esq").hidden = !$("lien-esq").children.length;
+  // The ribbon's « File » group shows only with something in it.
+  $("ruban-fichier").hidden = !$("actions").querySelector(
+    "#btn-parasolid:not([hidden]), #btn-step-asm:not([hidden]), a");
 }
 
 // A chosen file opens at once: a part goes through STEP (the view reads the
@@ -1481,8 +1955,10 @@ async function exporter(route) {
     $("lien-esq").innerHTML = "";
     grouper();
     $("vue-carte").style.display = "none";
+    $("ruban-vue").hidden = $("ruban-orienter").hidden = true;
     $("plan-carte").style.display = "none";
     $("fiche-carte").style.display = "none";
+    ficheMontrée = null;
     document.querySelector("main").classList.remove("avec-fiche");
   }
   log.innerHTML = ""; vide = true;
@@ -1509,7 +1985,13 @@ async function exporter(route) {
         a.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>`;
         a.append(état.fichier.split(".").pop());
         if (/\.(step|x_t|x_b|stl)$/i.test(état.fichier)) a.classList.add("sortie-3d");
-        $("lien").append(a);
+        if (/\.(x_t|x_b)$/i.test(état.fichier)) {
+          a.classList.add("sortie-xt");
+          $("btn-parasolid").hidden = true;
+          $("lien").prepend(a);  // where the button was
+        } else {
+          $("lien").append(a);
+        }
         grouper();
       }
       if (état.esquisses_step && !document.querySelector(`a[data-job-esq="${job}"]`)) {
@@ -1519,7 +2001,11 @@ async function exporter(route) {
         a.dataset.jobEsq = job;
         a.title = t("télécharger-esq", état.esquisses_step);
         a.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>`;
-        a.append("STEP");
+        // « Sketches » rather than a second « STEP »: you know which one you take.
+        const mot = document.createElement("span");
+        mot.dataset.t = "esquisses";
+        mot.textContent = t("esquisses");
+        a.append(mot);
         $("lien-esq").append(a);
         grouper();
       }
@@ -1549,6 +2035,7 @@ async function exporter(route) {
 // What the file says about itself. The values come from the file: they are
 // set as text, never as HTML.
 function fiche(d) {
+  ficheMontrée = d;
   const corps = $("fiche-table");
   corps.replaceChildren();
   const cellule = (tag, texte, classe) => {
@@ -1968,6 +2455,7 @@ function préparer(vue, pos) {
 
 function montrer(vue) {
   $("vue-carte").style.display = "block";
+  $("ruban-vue").hidden = $("ruban-orienter").hidden = false;
   const canvas = $("vue");
   if (!V.gl) {
     V.gl = canvas.getContext("webgl", { antialias: true, alpha: true });
@@ -2001,6 +2489,7 @@ function montrer(vue) {
   V.rayon = vue.rayon || 1;
   V.sel = -1; V.survol = -1;
   préparerEsquisses(gl, vue.esquisses);
+  préparerPmi(vue.pmi, vue.centre);
   orienter("iso");
   delete $("vue-info").dataset.t;  // status replaces the help text: no longer translated
   $("vue-info").textContent = t("vue-prête", vue.faces.length, vue.corps);
@@ -2197,6 +2686,165 @@ $("vue-esq").onchange = () => {
   if (V.gl) redessiner();
 };
 
+// ------------------------------------------------------------ PMI
+// DimXpert annotations (sldprt.dimxpert.pmi_en_vue), drawn on a 2D layer:
+// each leads from its feature's point, by a leader line, to its frame —
+// geometric tolerance and datum in cells, dimension as a label. Those of
+// one feature stack. A click on a frame selects it, and the status line
+// says which.
+function préparerPmi(liste, centre) {
+  V.pmi = null;
+  $("vue-pmi-bascule").hidden = !liste;
+  effacerPmi();
+  if (!liste) return;
+  const c = centre || [0, 0, 0];
+  const groupes = new Map();
+  liste.forEach((a, i) => {
+    const clé = a.ancre.join(",");
+    if (!groupes.has(clé)) groupes.set(clé, { p: a.ancre.map((v, k) => v - c[k]), membres: [] });
+    groupes.get(clé).membres.push(i);
+  });
+  V.pmi = { liste, groupes: [...groupes.values()], choisie: -1, cadres: [] };
+}
+
+function effacerPmi() {
+  const t = $("vue-pmi");
+  t.getContext("2d").clearRect(0, 0, t.width, t.height);
+}
+
+function pmi(mvp) {
+  const t = $("vue-pmi");
+  const r = window.devicePixelRatio || 1;
+  const l = t.clientWidth, h = t.clientHeight;
+  if (t.width !== Math.round(l * r) || t.height !== Math.round(h * r)) {
+    t.width = Math.round(l * r); t.height = Math.round(h * r);
+  }
+  const g = t.getContext("2d");
+  g.setTransform(r, 0, 0, r, 0, 0);
+  g.clearRect(0, 0, l, h);
+  if (!V.pmi || !$("vue-pmi-voir").checked) return;
+  const m = mvp;
+  const écran = ([x, y, z]) => {
+    const w = m[3] * x + m[7] * y + m[11] * z + m[15];
+    return [((m[0] * x + m[4] * y + m[8] * z + m[12]) / w + 1) / 2 * l,
+            (1 - (m[1] * x + m[5] * y + m[9] * z + m[13]) / w) / 2 * h];
+  };
+  const H = 20, pad = 5, encre = "#1b2433", vive = "#e07b0c";
+  const TEXTE = "12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+  const SYMBOLE = "15px 'Segoe UI Symbol', 'Cambria Math', 'DejaVu Sans', 'Noto Sans Symbols', sans-serif";
+  // The first cell of a tolerance frame is its symbol.
+  const police = (a, k) => (k === 0 && a.cadre && a.genre !== "Datum" ? SYMBOLE : TEXTE);
+  g.textBaseline = "middle";
+  V.pmi.cadres = [];
+  const dessinées = [];
+  // Each block (a feature's annotations, stacked) looks for a free spot
+  // around its point: first away from the screen centre, then turning and
+  // moving further out. Blocks already placed, and anchor points, are
+  // obstacles. With no free spot, the first try stays.
+  const posés = V.pmi.groupes.map((gr) => écran(gr.p)).map(([x, y]) => ({ x: x - 4, y: y - 4, w: 8, h: 8 }));
+  const touche = (r) => posés.some((q) => r.x < q.x + q.w + 3 && q.x < r.x + r.w + 3 &&
+                                           r.y < q.y + q.h + 3 && q.y < r.y + r.h + 3);
+  const ESSAIS = [];
+  for (const dist of [34, 58, 88, 124]) {
+    for (const angle of [0, 25, -25, 50, -50, 80, -80, 115, -115, 150, -150, 180]) {
+      ESSAIS.push([dist, angle * Math.PI / 180]);
+    }
+  }
+  for (const gr of V.pmi.groupes) {
+    const [ax, ay] = écran(gr.p);
+    const blocs = gr.membres.map((i) => {
+      const a = V.pmi.liste[i];
+      const largeurs = a.cases.map((c, k) => {
+        g.font = police(a, k);
+        return Math.max(g.measureText(c).width + 2 * pad, k === 0 && a.cadre ? H : 0);
+      });
+      return { i, a, largeurs, total: largeurs.reduce((s, w) => s + w, 0) };
+    });
+    const larg = Math.max(...blocs.map((b) => b.total)), haut = blocs.length * H;
+    let dx0 = ax - l / 2, dy0 = ay - h / 2;
+    const n = Math.hypot(dx0, dy0);
+    if (n < 1) { dx0 = 1; dy0 = -1; } else { dx0 /= n; dy0 /= n; }
+    let choix = null;
+    for (const [dist, angle] of ESSAIS) {
+      const c = Math.cos(angle), s = Math.sin(angle);
+      const dx = dx0 * c - dy0 * s, dy = dx0 * s + dy0 * c;
+      const ox = ax + dx * dist, oy = ay + dy * dist;
+      const r = { x: dx < 0 ? ox - larg : ox, y: dy < 0 ? oy - haut : oy, w: larg, h: haut };
+      const dedans = r.x >= 0 && r.y >= 0 && r.x + r.w <= l && r.y + r.h <= h;
+      if (!choix) choix = { r, dx };
+      if (dedans && !touche(r)) { choix = { r, dx }; break; }
+    }
+    posés.push(choix.r);
+    blocs.forEach((b, rang) => {
+      const x = choix.dx < 0 ? choix.r.x + larg - b.total : choix.r.x, y = choix.r.y + rang * H;
+      dessinées.push({ ...b, x, y, ax, ay, premier: rang === 0, bloc: choix.r });
+      V.pmi.cadres.push({ i: b.i, x, y, w: b.total, h: H });
+    });
+  }
+  // Leaders first, frames on top, the selected one last.
+  g.lineWidth = 1;
+  for (const d of dessinées) {
+    if (!d.premier) continue;
+    g.strokeStyle = "rgba(27,36,51,.7)";
+    g.beginPath(); g.moveTo(d.ax, d.ay);
+    const r = d.bloc;
+    const bx = Math.max(r.x, Math.min(d.ax, r.x + r.w)), by = Math.max(r.y, Math.min(d.ay, r.y + r.h));
+    g.lineTo(bx, by); g.stroke();
+    g.fillStyle = encre;
+    g.beginPath(); g.arc(d.ax, d.ay, 2.5, 0, 2 * Math.PI); g.fill();
+  }
+  dessinées.sort((p, q) => (p.i === V.pmi.choisie) - (q.i === V.pmi.choisie));
+  for (const d of dessinées) {
+    const choisie = d.i === V.pmi.choisie, trait = choisie ? vive : encre;
+    g.fillStyle = d.a.cadre ? "rgba(255,255,255,.95)" : "rgba(255,255,255,.8)";
+    g.fillRect(d.x, d.y, d.total, H);
+    g.strokeStyle = trait; g.lineWidth = choisie ? 2 : 1;
+    if (d.a.cadre) {
+      g.strokeRect(d.x + .5, d.y + .5, d.total - 1, H - 1);
+      let x = d.x;
+      for (const w of d.largeurs.slice(0, -1)) {
+        x += w; g.beginPath(); g.moveTo(x + .5, d.y); g.lineTo(x + .5, d.y + H); g.stroke();
+      }
+    } else if (choisie) {
+      g.strokeRect(d.x + .5, d.y + .5, d.total - 1, H - 1);
+    }
+    g.fillStyle = trait;
+    let x = d.x;
+    d.a.cases.forEach((c, k) => {
+      g.font = police(d.a, k);
+      g.textAlign = "center";
+      g.fillText(c, x + d.largeurs[k] / 2, d.y + H / 2 + .5);
+      x += d.largeurs[k];
+    });
+    g.textAlign = "left";
+  }
+}
+
+// The annotation whose frame is under the click, or -1.
+function pmiSous(c, ev) {
+  if (!V.pmi || !$("vue-pmi-voir").checked) return -1;
+  const r = c.getBoundingClientRect();
+  const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+  for (let k = V.pmi.cadres.length - 1; k >= 0; k--) {
+    const f = V.pmi.cadres[k];
+    if (mx >= f.x && mx <= f.x + f.w && my >= f.y && my <= f.y + f.h) return f.i;
+  }
+  return -1;
+}
+
+function choisirPmi(i) {
+  V.pmi.choisie = i;
+  const a = V.pmi.liste[i];
+  delete $("vue-info").dataset.t;
+  $("vue-info").textContent = t("pmi-info", a.nom, a.fonction, a.cases.join(" | "));
+  redessiner();
+}
+
+$("vue-pmi-voir").onchange = () => {
+  if (V.pmi && !$("vue-pmi-voir").checked) V.pmi.choisie = -1;
+  if (V.gl) redessiner();
+};
+
 function redessiner() {
   if (V.attente) return;
   V.attente = requestAnimationFrame(() => {
@@ -2217,9 +2865,28 @@ function redessiner() {
     arêtes(mvp, -1, SW.arête);
     if (V.survol >= 0 && V.survol !== V.sel) arêtes(mvp, V.survol, SW.survol);
     esquisses(mvp);
+    pmi(mvp);
     trièdre();
+    cube();
   });
 }
+
+// The view cube, top left, as in SolidWorks: six CSS 3D faces that turn
+// with the part. A click on a face gives its view.
+// The cube is built the CSS way (y down): its local frame is the model's,
+// Y flipped. The matrix sends its axes onto the screen (x right, y down,
+// z towards the eye).
+function cube() {
+  const c = $("vue-cube-corps");
+  if (!c || !V.droite) return;
+  const d = V.droite, h = V.haut, a = V.arrière;
+  const m = [d[0], -h[0], a[0], 0, -d[1], h[1], -a[1], 0, d[2], -h[2], a[2], 0, 0, 0, 0, 1];
+  c.style.transform = `matrix3d(${m.map((v) => v.toFixed(6)).join(",")})`;
+}
+
+document.querySelectorAll("[data-cube]").forEach((f) => {
+  f.onclick = () => V.gl && orienter(f.dataset.cube);
+});
 
 // Reference triad, bottom left, as in SolidWorks.
 function trièdre() {
@@ -2351,9 +3018,12 @@ function brancher(c) {
   c.addEventListener("pointerup", (e) => {
     if (glisse && glisse.bouton === 0 &&
         Math.hypot(e.clientX - glisse.x0, e.clientY - glisse.y0) < 4) {
-      // A sketch stroke under the click wins over the face behind it.
-      const k = esquisseSous(c, e);
-      if (k >= 0) choisirEsquisse(k);
+      // A PMI frame under the click wins over everything behind it, a
+      // sketch stroke over the face behind it.
+      const a = pmiSous(c, e);
+      const k = a >= 0 ? -1 : esquisseSous(c, e);
+      if (a >= 0) choisirPmi(a);
+      else if (k >= 0) choisirEsquisse(k);
       else choisir(sous(c, e));
     }
     glisse = null;
@@ -2402,9 +3072,6 @@ function survoler(c, e) {
 }
 
 $("vue-recadrer").onclick = () => V.gl && ajuster();
-document.querySelectorAll("[data-vue]").forEach((b) => {
-  b.onclick = () => V.gl && orienter(b.dataset.vue);
-});
 $("vue-copier").onclick = () => {
   if (V.sel >= 0) navigator.clipboard.writeText(V.faces[V.sel].nom);
 };
@@ -2640,8 +3307,12 @@ $("journal-copier").onclick = (e) => {
 function pleinePage(carte, oui) {
   carte.classList.toggle("pleine-page", oui);
   document.body.classList.toggle("pleine-page", oui);
-  if (carte.id === "vue-carte" && V.gl) redessiner();
+  if (carte.id === "vue-carte") {
+    $("vue-plein").checked = oui;
+    if (V.gl) redessiner();
+  }
 }
+$("vue-plein").onchange = () => pleinePage($("vue-carte"), $("vue-plein").checked);
 document.querySelectorAll(".plein").forEach((b) => {
   b.onclick = () => {
     const carte = $(b.dataset.cible);
