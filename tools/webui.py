@@ -719,7 +719,7 @@ HTML = r"""<!doctype html>
   }
   :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
-  main { max-width: 960px; margin: 0 auto; }
+  main { max-width: 1040px; margin: 0 auto; }
   h1 { font-size: 18px; margin: 0; font-weight: 700; flex: 0 0 auto;
        display: flex; align-items: center; gap: var(--s3); }
   h1 > span:first-of-type { font-weight: 400; color: var(--muted); }
@@ -774,7 +774,7 @@ HTML = r"""<!doctype html>
   .carte:has(> #depot-ligne) { padding: var(--s3); }
   #depot-ligne { align-items: stretch; }
   #depot-ligne #depot {
-    flex: 0 0 auto; max-width: 260px; display: grid; grid-template-columns: auto minmax(0, 1fr);
+    flex: 0 0 auto; max-width: 230px; display: grid; grid-template-columns: auto minmax(0, 1fr);
     column-gap: var(--s3); row-gap: 2px; align-content: center; text-align: left;
     padding: var(--s3) var(--s4);
   }
@@ -814,6 +814,7 @@ HTML = r"""<!doctype html>
     border-radius: var(--radius); background: var(--control);
   }
   .ruban-ligne .interrupteur .piste { display: none; }
+  .ruban-ligne .interrupteur.icone-r { width: 30px; padding: 0; justify-content: center; }
   .ruban-ligne .interrupteur:hover { border-color: var(--muted); }
   .ruban-ligne .interrupteur:has(input:checked) {
     background: var(--accent-soft); color: var(--accent);
@@ -848,8 +849,19 @@ HTML = r"""<!doctype html>
     box-shadow: inset 0 1px 0 rgba(255,255,255,.28); text-shadow: 0 -1px 0 rgba(0,0,0,.22);
   }
   a.telecharger:hover { filter: brightness(1.06); }
-  #local { margin: var(--s3) 0 0; color: var(--muted); font-size: 12px; }
-  #exemples { margin: var(--s3) 0 0; color: var(--muted); font-size: 12px;
+  /* The banner, edge to edge, at the top: SolidWorks red, white text, the
+     promise first, in bold, then the examples. */
+  #bandeau { margin: calc(-1 * var(--s8)) calc(-1 * var(--s4)) var(--s5);
+             background: #c8201a; color: #fff; }
+  #bandeau:not(:has(p:not([hidden]))) { display: none; }
+  .bandeau-ligne { padding: 7px var(--s4); display: flex; flex-wrap: wrap;
+                   align-items: center; justify-content: center; gap: var(--s1) var(--s6); }
+  #local { margin: 0; font-size: 12px; font-weight: 700; }
+  #exemples button { background: transparent; color: #fff; box-shadow: none;
+                     border: 1px solid rgba(255,255,255,.55); }
+  #exemples button:hover { background: rgba(255,255,255,.14); border-color: #fff; filter: none; }
+  @media (max-width: 560px) { #bandeau { margin-top: calc(-1 * var(--s5)); } }
+  #exemples { margin: 0; font-size: 12px;
               display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--s2); }
   #exemples button { flex: 0 0 auto; height: 26px; padding: 0 10px; font-size: 12px; }
   /* The progress bar: measured during upload, back and forth while the
@@ -1068,6 +1080,24 @@ HTML = r"""<!doctype html>
     #vue, #plan { height: 380px; }
   }
 </style>
+<!-- The banner, at the top on a red background: the promise that the file
+     stays in the browser (published page only), then the examples. -->
+<div id="bandeau"><div class="bandeau-ligne">
+    <!-- Shown by the published page only (statique.js): the local server
+         does receive the file. -->
+    <p id="local" data-t="local" hidden>Your file is not uploaded to any server:
+      it is read and converted in your browser.</p>
+    <!-- Examples fetched from GitHub, which allows it: NIST models (public domain)
+         and a drawing from andyeske/How-to-CAD-Almost-Anything (MIT). -->
+    <p id="exemples"><span data-t="exemples">No file at hand? Open an example:</span>
+      <button class="exemple" data-t="ex-piece" data-url="https://raw.githubusercontent.com/cadmpeg/cadmpeg/3dc401df603b99f61f7800b05f7027e54f111eea/corpus/nist-pmi/sldprt/nist_ftc_08_asme1_rc_sw1802.SLDPRT"
+              data-nom="nist_ftc_08_asme1_rc_sw1802.SLDPRT">NIST part</button>
+      <button class="exemple" data-t="ex-asm" data-url="https://raw.githubusercontent.com/cehaho/OpenSW/main/examples/nist_mtc_crada_assembly_rev-D.SLDASM"
+              data-nom="nist_mtc_crada_assembly_rev-D.SLDASM">NIST assembly</button>
+      <button class="exemple" data-t="ex-plan" data-url="https://raw.githubusercontent.com/andyeske/How-to-CAD-Almost-Anything/f2bd87ed5b267ba4f962919ba3ab73641bfca5ad/Session%20Files/Session%206/2x4%20LEGO%20brick.SLDDRW"
+              data-nom="2x4 LEGO brick.SLDDRW">LEGO drawing</button>
+    </p>
+</div></div>
 <main>
   <!-- Logo: the open box. Also used as the favicon (see below), so the page
        loads no file. -->
@@ -1117,9 +1147,6 @@ HTML = r"""<!doctype html>
         id="vue-pmi-voir"><span class="piste" aria-hidden="true"></span><span data-t="pmi">PMI</span></label>
       <label class="interrupteur" id="vue-esq-bascule" hidden><input type="checkbox" role="switch"
         id="vue-esq"><span class="piste" aria-hidden="true"></span><span data-t="esquisses">Sketches</span></label>
-      <label class="interrupteur" data-t-title="plein-écran" title="Full page (Esc to go back)"><input
-        type="checkbox" role="switch" id="vue-plein"><span class="piste" aria-hidden="true"></span><span
-        data-t="pleine-page">Full page</span></label>
         </div>
       </section>
       <section class="ruban-groupe" id="ruban-orienter" hidden>
@@ -1127,6 +1154,9 @@ HTML = r"""<!doctype html>
         <div class="ruban-ligne">
           <button class="icone-r" data-cube="iso" data-t-title="vue-iso" title="Isometric"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 20 7.5v9L12 21l-8-4.5v-9ZM4 7.5l8 4.5 8-4.5M12 12v9"/></svg></button>
           <button class="icone-r" id="vue-recadrer" data-t-title="zoom-mieux" title="Zoom to fit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg></button>
+          <label class="interrupteur icone-r" data-t-title="plein-écran" title="Full page (Esc to go back)"><input
+            type="checkbox" role="switch" id="vue-plein" data-t-aria="pleine-page" aria-label="Full page"><svg
+            viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg></label>
         </div>
       </section>
     </div>
@@ -1135,18 +1165,6 @@ HTML = r"""<!doctype html>
       data-langue="es" title="Español">ES</button><button data-langue="fr" title="Français">FR</button><button
       data-langue="ar" title="العربية">ع</button></span>
     </div>
-    <!-- Examples fetched from GitHub, which allows it: NIST models (public domain)
-         and a drawing from andyeske/How-to-CAD-Almost-Anything (MIT). -->
-    <p id="exemples"><span data-t="exemples">No file at hand? Open an example:</span>
-      <button class="exemple" data-t="ex-piece" data-url="https://raw.githubusercontent.com/cadmpeg/cadmpeg/3dc401df603b99f61f7800b05f7027e54f111eea/corpus/nist-pmi/sldprt/nist_ftc_08_asme1_rc_sw1802.SLDPRT"
-              data-nom="nist_ftc_08_asme1_rc_sw1802.SLDPRT">NIST part</button>
-      <button class="exemple" data-t="ex-asm" data-url="https://raw.githubusercontent.com/cehaho/OpenSW/main/examples/nist_mtc_crada_assembly_rev-D.SLDASM"
-              data-nom="nist_mtc_crada_assembly_rev-D.SLDASM">NIST assembly</button>
-      <button class="exemple" data-t="ex-plan" data-url="https://raw.githubusercontent.com/andyeske/How-to-CAD-Almost-Anything/f2bd87ed5b267ba4f962919ba3ab73641bfca5ad/Session%20Files/Session%206/2x4%20LEGO%20brick.SLDDRW"
-              data-nom="2x4 LEGO brick.SLDDRW">LEGO drawing</button>
-    </p>
-    <p id="local" data-t="local" hidden>Your file is not uploaded to any server:
-      it is read and converted in your browser.</p>
     <div id="charge" hidden>
       <div class="charge-piste"><div id="charge-barre"></div></div>
       <div id="charge-texte"></div>
@@ -1746,6 +1764,9 @@ function traduire() {
   document.title = t("titre");
   document.querySelectorAll("[data-t]").forEach((e) => { e.textContent = t(e.dataset.t); });
   document.querySelectorAll("[data-t-title]").forEach((e) => { e.title = t(e.dataset.tTitle); });
+  document.querySelectorAll("[data-t-aria]").forEach((e) => {
+    e.setAttribute("aria-label", t(e.dataset.tAria));
+  });
   document.querySelectorAll("[data-langue]").forEach((b) => {
     b.classList.toggle("choisi", b.dataset.langue === LANGUE);
   });
