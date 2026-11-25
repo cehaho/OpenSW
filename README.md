@@ -1,4 +1,4 @@
-# openSW
+# <img src="freecad/icon.svg" alt="" width="40" align="top"> openSW
 
 [![CodeQL](https://github.com/cehaho/OpenSW/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/cehaho/OpenSW/actions/workflows/github-code-scanning/codeql)
 
