@@ -1,6 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <path d="M32 6 54 18v28L32 58 10 46V18z" fill="#f4f6f8" stroke="#2f3e4e" stroke-width="3" stroke-linejoin="round"/>
-  <path d="M10 18 32 30l22-12M32 30v28" fill="none" stroke="#2f3e4e" stroke-width="3" stroke-linejoin="round"/>
-  <path d="M32 30 54 18v28L32 58z" fill="#c9302c"/>
-  <path d="M32 30 54 18v28L32 58z" fill="none" stroke="#2f3e4e" stroke-width="3" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- The open box: the logo of the OpenSW page (tools/webui.py). -->
+  <defs>
+    <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff6a5c"/><stop offset="1" stop-color="#e1251b"/>
+    </linearGradient>
+  </defs>
+  <polygon points="19,44 50,62 50,94 19,76" fill="#6d6e71"/>
+  <polygon points="50,62 81,44 81,76 50,94" fill="#4d4e51"/>
+  <polygon points="19,44 50,26 81,44 50,62" fill="url(#glow)" stroke="#1d1d1f" stroke-width="2"/>
+  <polygon points="19,24 50,6 81,24 50,42" fill="#e6e7e8" stroke="#1d1d1f" stroke-width="2"
+           transform="rotate(-8 50 24)"/>
+  <path d="M19,44 L50,62 L81,44 M50,62 L50,94" stroke="#1d1d1f" stroke-width="2" fill="none"/>
 </svg>
