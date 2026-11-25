@@ -1,4 +1,4 @@
-# OpenSW for FreeCAD
+# <img src="icon.svg" alt="" width="40" align="top"> OpenSW for FreeCAD
 
 Open SolidWorks files in FreeCAD — **without SolidWorks**.
 
