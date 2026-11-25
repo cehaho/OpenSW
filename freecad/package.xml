@@ -4,11 +4,12 @@
   <description>Open SolidWorks parts, assemblies and drawings (.SLDPRT, .SLDASM, .SLDDRW) without SolidWorks: exact B-rep geometry, colours and sketches.</description>
   <version>0.1.0</version>
   <date>2026-11-25</date>
-  <maintainer>cehaho</maintainer>
+  <maintainer email="56485277+cehaho@users.noreply.github.com">cehaho</maintainer>
   <license file="LICENSE">AGPL-3.0-only</license>
   <url type="repository" branch="main">https://github.com/cehaho/OpenSW-FreeCAD</url>
   <url type="bugtracker">https://github.com/cehaho/OpenSW-FreeCAD/issues</url>
-  <url type="readme">https://github.com/cehaho/OpenSW-FreeCAD/blob/main/README.md</url>
+  <url type="readme">https://raw.githubusercontent.com/cehaho/OpenSW-FreeCAD/main/README.md</url>
+  <icon>icon.svg</icon>
 
   <content>
     <workbench>
