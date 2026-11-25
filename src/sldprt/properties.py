@@ -240,16 +240,30 @@ def dimensions_in(data: bytes) -> dict:
     dimension); its symbol is in the displayed text."""
     out = {"cotes": [], "non_lues": 0}
     starts = []
-    for cls, kind in ((_LENGTH_CLASS, "longueur"), (_ANGLE_CLASS, "angle")):
-        i = data.find(cls)
-        if i < 0:
-            continue
+    # The two bytes after the class name are not the class's own: they come
+    # before every named object of the stream (a dimension, but also "Blocks"
+    # or a "DetailItem"). What tells the class of a later dimension is the
+    # MFC class reference written just before, "xx 8y", one per class. Its
+    # number cannot be derived without counting every object of the stream:
+    # we take the first reference after the class name that was not seen
+    # before it and whose body is a parameter's.
+    defined = sorted((i, cls, kind)
+                     for cls, kind in ((_LENGTH_CLASS, "longueur"), (_ANGLE_CLASS, "angle"))
+                     if (i := data.find(cls)) >= 0)
+    taken = set()
+    for i, cls, kind in defined:
         mark = data[i + len(cls):i + len(cls) + 2]
         starts.append((i + len(cls) + 2, kind))
-        j = starts[-1][0]
+        references = []
+        j = 0
         while (j := data.find(mark + bytes.fromhex("fffeff"), j + 1)) >= 0:
-            if j >= 2 and data[j - 1] & 0x80:  # a class reference, "xx 8y"
-                starts.append((j + 2, kind))
+            if j >= 2 and data[j - 1] & 0x80 and _parameter(data, j + 2) is not None:
+                references.append((j, data[j - 2:j]))
+        before = {ref for j, ref in references if j < i} | taken
+        own = next((ref for j, ref in references if j > i and ref not in before), None)
+        if own is not None:
+            taken.add(own)
+            starts.extend((j + 2, kind) for j, ref in references if ref == own)
     for start, kind in sorted(starts):
         read = _parameter(data, start)
         if read is None:
