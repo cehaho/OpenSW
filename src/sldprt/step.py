@@ -21,8 +21,11 @@ SURFACES = {"PLANE", "CYLINDER", "CONE", "SPHERE", "TORUS", "B_SURFACE",
 REPARAMETRISED = {"BLENDED_EDGE"}
 
 PCURVE_EXACT = {"PLANE"}
+#: ``SP_CURVE`` is here because an edge can name one bare, with no
+#: ``TRIMMED_CURVE`` above it. ``Translator.curve`` already writes it; this
+#: gate used to refuse it first, and the edge took its whole body with it.
 CURVES = {"LINE", "CIRCLE", "ELLIPSE", "B_CURVE", "TRIMMED_CURVE",
-          "INTERSECTION"}
+          "INTERSECTION", "SP_CURVE"}
 
 NULL_DOUBLE = -3.14158e13
 
