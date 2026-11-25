@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
+  <name>OpenSW</name>
+  <description>Open SolidWorks parts, assemblies and drawings (.SLDPRT, .SLDASM, .SLDDRW) without SolidWorks: exact B-rep geometry, colours and sketches.</description>
+  <version>0.1.0</version>
+  <date>2026-11-25</date>
+  <maintainer>cehaho</maintainer>
+  <license file="LICENSE">AGPL-3.0-only</license>
+  <url type="repository" branch="main">https://github.com/cehaho/OpenSW-FreeCAD</url>
+  <url type="bugtracker">https://github.com/cehaho/OpenSW-FreeCAD/issues</url>
+  <url type="readme">https://github.com/cehaho/OpenSW-FreeCAD/blob/main/README.md</url>
+
+  <content>
+    <workbench>
+      <!-- An importer, not a workbench: Init.py registers the file types. -->
+      <name>OpenSW importer</name>
+      <subdirectory>./</subdirectory>
+      <freecadmin>1.0.0</freecadmin>
+      <depend type="python">olefile</depend>
+      <tag>import</tag>
+      <tag>solidworks</tag>
+      <tag>sldprt</tag>
+      <tag>sldasm</tag>
+      <tag>slddrw</tag>
+    </workbench>
+  </content>
+</package>

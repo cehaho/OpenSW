@@ -95,6 +95,21 @@ uploaded, only the page and its libraries are downloaded. The STEP is
 the same as the desktop one except for the last digits (WebAssembly's
 `sin`/`cos`) and LF line endings.
 
+## In FreeCAD
+
+`freecad/` is an importer for [FreeCAD](https://www.freecad.org) 1.0 or
+later: SolidWorks parts, assemblies and drawings show up in **File > Open**.
+
+```sh
+python tools/freecad_addon.py                  # writes _freecad/OpenSW/
+```
+
+Copy `_freecad/OpenSW/` into FreeCAD's `Mod` directory and restart FreeCAD.
+A part arrives as its exact bodies, one object each, with its sketches (real
+Sketcher sketches, without constraints); an assembly is exact when its part
+files sit next to it, a display mesh otherwise; a drawing arrives as flat
+geometry. [`freecad/README.md`](freecad/README.md) says what to expect.
+
 ## Assemblies
 
 The web app shows an assembly (`.SLDASM`) in 3D from the display mesh
