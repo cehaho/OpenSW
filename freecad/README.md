@@ -1,15 +1,16 @@
 # <img src="icon.svg" alt="" width="40" align="top"> OpenSW for FreeCAD
 
-Open SolidWorks files in FreeCAD — **without SolidWorks**.
+Open SolidWorks and Parasolid files in FreeCAD — **without SolidWorks**.
 
 | File | What arrives in FreeCAD |
 |---|---|
 | `.SLDPRT` | The exact bodies (B-rep, from the file's own Parasolid data), one object per body, their colours, and every sketch |
 | `.SLDASM` | The assembly with each instance placed. Exact when the part files sit next to it; otherwise the display mesh the assembly keeps of each part |
 | `.SLDDRW` | Each sheet as flat geometry: lines, arcs, dimensions as drawn, texts, the projected edges of every view |
+| `.x_t`, `.x_b` | A Parasolid file saved by SolidWorks: its exact bodies, one object per body, and their colours |
 
-After installing, SolidWorks files simply show up in **File > Open** and
-**File > Import**.
+After installing, SolidWorks and Parasolid files simply show up in
+**File > Open** and **File > Import**.
 
 ## What to expect
 
@@ -30,6 +31,11 @@ After installing, SolidWorks files simply show up in **File > Open** and
 - **A drawing is a picture you can measure, not a TechDraw page.** It is what
   SolidWorks drew, in millimetres on the XY plane, sheets side by side.
   Shaded views arrive by their edges only, pictures are not drawn.
+
+- **Parasolid is read, not written.** A `.x_t` or `.x_b` opens like a part
+  without sketches. One saved by another program than SolidWorks may use a
+  Parasolid version the reader does not know, and is then refused with a
+  message. FreeCAD models are not exported to Parasolid.
 
 The report view says what was read and — always — what was not.
 
