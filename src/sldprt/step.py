@@ -1629,9 +1629,13 @@ def write_step(model: Model, path: str | Path, *, name: str = "part") -> WriteRe
 
     solids, sheets = [], []
     partition = getattr(model, PARTITION_MARK, False)
+    # A part with nothing but sheets is a surface part: its sheets are the
+    # model. A partition's sheets are only left out next to a solid, where
+    # SolidWorks keeps construction surfaces it does not export.
+    surface_part = not any(model.is_solid_body(node) for node in model.bodies)
     for body_node in model.bodies:
         if not model.is_solid_body(body_node):
-            if partition:
+            if partition and not surface_part:
                 translator.report.partition_sheets += 1
                 continue
             sheet = translator.sheet(body_node)
@@ -1641,7 +1645,7 @@ def write_step(model: Model, path: str | Path, *, name: str = "part") -> WriteRe
         solid = translator.body(body_node)
         if solid is not None:
             solids.append(f"#{solid}")
-    if not solids:
+    if not solids and not sheets:
         why = translator.report.refusals()
         error = StepError(
             f"no body could be written — {why}" if why
@@ -1656,8 +1660,17 @@ def write_step(model: Model, path: str | Path, *, name: str = "part") -> WriteRe
     representation = writer.add(
         "ADVANCED_BREP_SHAPE_REPRESENTATION ( 'NONE', "
         f"( #{axis}, {', '.join(solids)} ), #{context} )"
-    )
-    if sheets:
+    ) if solids else None
+    if sheets and representation is None:
+        # No solid: the sheets' representation is the product's own.
+        model_item = writer.add(
+            f"SHELL_BASED_SURFACE_MODEL ( 'NONE', ( {', '.join(sheets)} ) )"
+        )
+        representation = writer.add(
+            "MANIFOLD_SURFACE_SHAPE_REPRESENTATION ( 'NONE', "
+            f"( #{axis}, #{model_item} ), #{context} )"
+        )
+    elif sheets:
         model_item = writer.add(
             f"SHELL_BASED_SURFACE_MODEL ( 'NONE', ( {', '.join(sheets)} ) )"
         )

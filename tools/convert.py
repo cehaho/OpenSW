@@ -63,6 +63,9 @@ def step(path: Path, destination: Path) -> str:
     model = load_model(path)
     report = write_step(model, destination, name=destination.stem[:MAX_EXPORT_NAME_LENGTH])
     told = f"{report.bodies} bodies, {report.faces} faces"
+    if report.sheets:
+        # A surface part has sheets only; "0 bodies" alone would read as empty.
+        told = f"{report.bodies} bodies, {report.sheets} sheet(s), {report.faces} faces"
     if report.skipped_bodies:
         told += f", {report.skipped_bodies} bodies left out"
         which = report.dropped_bodies()
