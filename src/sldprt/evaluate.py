@@ -705,7 +705,8 @@ def _composed(model, surface_node, curve, t):
     return surface_point(model, surface_node, u, v)
 
 
-CURVE_TOLERANCE = 1e-6
+# Metres. Keep fitting error below the 1e-5 mm STEP validation budget.
+CURVE_TOLERANCE = 1e-9
 
 MAX_BISECTIONS = 8
 
@@ -888,6 +889,8 @@ def adaptive_cubic(model, surface_node, curve, tolerance=CURVE_TOLERANCE,
                 pending.append((middle, t1, depth + 1))
                 pending.append((t0, middle, depth + 1))
                 continue
+            if error > tolerance:
+                raise EvaluateError("surface curve exceeds the fitting tolerance at maximum depth")
             worst = max(worst, error)
             poles.extend([p1, p2, end])
             times.append(t1)

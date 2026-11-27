@@ -31,6 +31,7 @@ from pathlib import Path, PureWindowsPath
 from struct import pack, unpack_from
 
 from .container import Container, open_container
+from .features import _payload
 
 NS = "{http://www.solidworks.com/sw2003/schema}"
 UTF16 = b"\xff\xfe\xff"
@@ -61,6 +62,10 @@ class Composant:
     hors_nomenclature: bool = False
     #: The part configuration the instance shows (``swConfigurationName``).
     configuration: str = ""
+    #: Saved reference as authored, including the directory when present.
+    source_path: str = ""
+    #: Original local placement, before composing with the parent.
+    local_transform: tuple[float, ...] = ()
 
     def placer(self, p) -> tuple[float, float, float]:
         """A part point (m) in the assembly (m): ``p·R + t``."""
@@ -142,7 +147,8 @@ def _arbre(xml: bytes) -> list[Composant]:
     def descendre(modele, parent, prefixe, cache, supprime):
         for ref in modele.findall(f"{NS}swReference"):
             nom = f"{ref.get('swName')}-{ref.get('swReferenceNumber')}"
-            matrice = _composer(_matrice(ref.get("swTransform")), parent)
+            local_transform = _matrice(ref.get("swTransform"))
+            matrice = _composer(local_transform, parent)
             enfant = modeles.get(ref.get("swModelRef"))
             fichier = fichiers.get(enfant.get("swFileRef")) if enfant is not None else None
             c = cache or ref.get("swHidden") == "YES"
@@ -156,7 +162,8 @@ def _arbre(xml: bytes) -> list[Composant]:
             out.append(Composant(
                 f"{prefixe}{nom}", PureWindowsPath(chemin).name, matrice, c, s,
                 hors_nomenclature=ref.get("swExcludeFromBOM") == "YES",
-                configuration=ref.get("swConfigurationName") or ""))
+                configuration=ref.get("swConfigurationName") or "", source_path=chemin,
+                local_transform=local_transform))
 
     modele = modele_de(tete.get("id"))
     if modele is None:
@@ -395,11 +402,17 @@ def read_assembly(source: str | Path | Container) -> Assembly:
     """An assembly ready to show: placed components and their meshes."""
     conteneur = source if isinstance(source, Container) else open_container(source)
     flux = {b.name: b.data for b in conteneur.blobs}
-    xml = flux.get("swXmlContents/COMPINSTANCETREE")
-    if xml is None:
+    tree = _payload(conteneur, "swXmlContents/COMPINSTANCETREE")
+    if tree is None:
         raise AssemblyError("no swXmlContents/COMPINSTANCETREE stream: not an "
                             "assembly")
-    composants = _arbre(xml)
+    composants = _arbre(tree[1])
+    for name in tuple(flux):
+        if name.endswith("__ZLB") and (name.startswith("FaceTessellations/") or name == "Contents/DisplayLists__ZLB"):
+            base = name.removesuffix("__ZLB")
+            if base not in flux:
+                flux[base] = _payload(conteneur, base)[1]
+            del flux[name]
     maillages, non_lus = _maillages(flux)
     for c in composants:
         # The directory names a component by its last level.
@@ -416,8 +429,10 @@ def read_assembly(source: str | Path | Container) -> Assembly:
             non_lus["component with no mesh read"] = n
         else:
             del non_lus["component with no mesh read"]
-    mates = _mates(flux.get("SwDocContentMgr/SwDocContentMgrInfo"))
-    _values(mates, flux.get("Contents/Config-0-MatesList"), non_lus)
+    mate_xml = _payload(conteneur, "SwDocContentMgr/SwDocContentMgrInfo")
+    mate_values = _payload(conteneur, "Contents/Config-0-MatesList")
+    mates = _mates(mate_xml[1] if mate_xml else None)
+    _values(mates, mate_values[1] if mate_values else None, non_lus)
     return Assembly(composants, mates, non_lus)
 
 

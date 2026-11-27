@@ -714,19 +714,6 @@ def _on_a_blend(model, surface, depth=0) -> bool:
     return False
 
 
-def _on_the_vertices(poles, ends):
-    if ends is None or ends[0] is None or ends[1] is None:
-        return poles
-    premier, dernier = ends
-    droit = math.dist(poles[0], premier) + math.dist(poles[-1], dernier)
-    inverse = math.dist(poles[0], dernier) + math.dist(poles[-1], premier)
-    if inverse < droit:
-        premier, dernier = dernier, premier
-    poles = [list(p) for p in poles]
-    poles[0], poles[-1] = list(premier), list(dernier)
-    return poles
-
-
 def _write_cubic_3d(writer: Writer, poles, knots, mults) -> int:
     polygon = "( " + ", ".join(f"#{writer.point(pole)}" for pole in poles) + " )"
     return writer.add(
@@ -1014,7 +1001,7 @@ class Translator:
         )
         return pcurve, surface_node, spec, span, along
 
-    def surface_curve(self, halfedge: Node, ends=None) -> int | None:
+    def surface_curve(self, halfedge: Node) -> int | None:
         partner = self.model.get(halfedge.values.get("other", 0))
         reads = [self._sp_geometry(halfedge)]
         if partner is not None:
@@ -1035,7 +1022,8 @@ class Translator:
             return None
         self.report.approximated_curves += 1
         self.report.worst_curve_error = max(self.report.worst_curve_error, error)
-        poles = _on_the_vertices(poles, ends)
+        # Keep the fitted trim on its source surface. Tolerant topological
+        # vertices are emitted separately as the EDGE_CURVE endpoints.
         curve3d = _write_cubic_3d(self.writer, poles, knots, mults)
 
         sides = [self._pcurve(halfedge)]
@@ -1084,7 +1072,7 @@ class Translator:
             if seam_point is not None:
                 ends = (seam_point, seam_point)
         if curve_node is None:
-            curve = self.surface_curve(halfedge, ends)
+            curve = self.surface_curve(halfedge)
             if curve is None:
                 self.report._note(
                     self.report.skipped_curves, "(edge without curve)"

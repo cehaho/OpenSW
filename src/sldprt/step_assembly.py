@@ -106,11 +106,11 @@ def write_step_assembly(asm: Assembly, parts: dict[str, Model], path: str | Path
         translator = Translator(model, writer)
         solids, sheets = [], []
         partition = getattr(model, PARTITION_MARK, False)
+        surface_part = not any(model.is_solid_body(node) for node in model.bodies)
         for body in model.bodies:
             if not model.is_solid_body(body):
-                # As for a single part: the sheets of a partition are left
-                # out, those of a transmit are written.
-                if partition:
+                # Match write_step's policy for surface-only part definitions.
+                if partition and not surface_part:
                     translator.report.partition_sheets += 1
                     continue
                 n = translator.sheet(body)
@@ -120,16 +120,16 @@ def write_step_assembly(asm: Assembly, parts: dict[str, Model], path: str | Path
             n = translator.body(body)
             if n is not None:
                 solids.append(f"#{n}")
-        if not solids:
+        if not solids and not sheets:
             writer.rewind(mark)
-            report.refused[label] = translator.report.refusals() or "no solid body"
+            report.refused[label] = translator.report.refusals() or "no transferable body"
             written[key] = None
             return None
         frame = writer.add(f"AXIS2_PLACEMENT_3D ( 'NONE', #{origin}, $, $ )")
         brep = writer.add(
             "ADVANCED_BREP_SHAPE_REPRESENTATION ( 'NONE', "
             f"( #{frame}, {', '.join(solids)} ), #{context} )"
-        )
+        ) if solids else None
         if sheets:
             model_item = writer.add(
                 f"SHELL_BASED_SURFACE_MODEL ( 'NONE', ( {', '.join(sheets)} ) )"
@@ -138,9 +138,12 @@ def write_step_assembly(asm: Assembly, parts: dict[str, Model], path: str | Path
                 "MANIFOLD_SURFACE_SHAPE_REPRESENTATION ( 'NONE', "
                 f"( #{frame}, #{model_item} ), #{context} )"
             )
-            writer.add(
-                f"SHAPE_REPRESENTATION_RELATIONSHIP ( 'NONE', '', #{brep}, #{surfaces} )"
-            )
+            if brep is None:
+                brep = surfaces
+            else:
+                writer.add(
+                    f"SHAPE_REPRESENTATION_RELATIONSHIP ( 'NONE', '', #{brep}, #{surfaces} )"
+                )
         shape = writer.add(
             f"SHAPE_REPRESENTATION ( '{_string_literal(Path(label).stem)}', "
             f"( #{frame} ), #{context} )"
@@ -167,9 +170,10 @@ def write_step_assembly(asm: Assembly, parts: dict[str, Model], path: str | Path
         if done is not None:
             instances.append((c, done))
     if not instances:
+        reasons = [f"{part}: {reason}" for part, reason in report.refused.items()]
+        reasons.extend(f"{part}: missing" for part in report.missing)
         raise StepError("no part of the assembly could be written"
-                        + (f"; missing: {', '.join(report.missing)}"
-                           if report.missing else ""))
+                        + ("; " + "; ".join(reasons) if reasons else ""))
 
     # The assembly: one frame per instance, the component matrix. A point is
     # placed at p·R + t, so the part x axis goes to row 0 of R, z to row 2.
