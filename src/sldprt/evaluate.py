@@ -513,6 +513,14 @@ POLE_RETREAT = 1.0e-5
 
 
 def _uv_domain(model, node):
+    if node.name == "SPUN_SURF":
+        profile = model.get(node.values.get("profile", 0))
+        if profile and profile.name == "B_CURVE":
+            curve = read_nurbs_curve(model, profile)
+            return ((curve["knots"][curve["degree"]], curve["knots"][len(curve["poles"])]),
+                    (0.0, 2.0 * math.pi))
+        if profile and profile.name in ("CIRCLE", "ELLIPSE"):
+            return ((0.0, 2.0 * math.pi), (0.0, 2.0 * math.pi))
     if node.name != "B_SURFACE":
         return None
     spec = read_nurbs_surface(model, node)
@@ -590,6 +598,7 @@ def _normal_from_partials(model, node, u, v):
 
 
 PERIODS = {
+    "SPUN_SURF": (None, 2.0 * math.pi),
     "CYLINDER": (2.0 * math.pi, None),
     "CONE": (2.0 * math.pi, None),
     "SPHERE": (2.0 * math.pi, None),
@@ -999,7 +1008,9 @@ def projected_intersection(model, surfaces, stations, samples):
             raise EvaluateError("intersection carriers disagree after projection")
         return point
 
-    return _fit_parametric_spans(point_at, times, CURVE_TOLERANCE/10)
+    # STEP readback also constructs pcurves on the two carriers. Reserve margin
+    # for that projection in addition to the cubic's sampled interpolation error.
+    return _fit_parametric_spans(point_at, times, CURVE_TOLERANCE/100)
 
 
 def paired_surface_trim(model, primary, partner):

@@ -90,6 +90,14 @@ class SurfaceCurveTest(unittest.TestCase):
                         deviation = math.hypot(x,y)-.02 if carrier is revolved else y-points[0][1]
                         self.assertLess(abs(deviation),5e-9)
 
+    def test_revolution_grid_uses_the_active_profile_knot_range(self):
+        surface = SimpleNamespace(name="SPUN_SURF", values={"profile": 1})
+        profile = SimpleNamespace(name="B_CURVE")
+        curve = {"degree": 2, "knots": [-2, -1, 3, 4, 5, 9, 10], "poles": [0] * 4}
+        with patch.object(e, "read_nurbs_curve", return_value=curve):
+            self.assertEqual(e._uv_domain({1: profile}, surface), ((3, 5), (0, 2 * math.pi)))
+        self.assertEqual(e.PERIODS[surface.name], (None, 2 * math.pi))
+
     def test_curve_refines_one_small_region_without_relaxing_error(self):
         spec={"degree":1,"poles":[(0,0),(1,0)],"knots":[0,0,1,1],"distinct":[0,1]}
         def span(point_at,a,b,p,q):
