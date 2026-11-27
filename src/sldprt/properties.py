@@ -454,8 +454,11 @@ def read_properties(container: Container) -> dict:
     """Everything the document says about itself, read, never computed."""
     info = _information(container)
     configs_found = []
+    saved_active = set()
     root = _xml(container, "swXmlContents/Features")
     if root is not None:
+        saved_active = {e.get("swName") for e in root.iter(f"{{{_NS_SW}}}swConfiguration")
+                        if e.get("swMostRecentConfiguration") == "YES" and e.get("swName")}
         configs_found = [(int(e.get("swID")), e.get("swName"))
                          for e in root.iter(f"{{{_NS_SW}}}swConfiguration")
                          if (e.get("swID") or "").isdigit()]
@@ -484,6 +487,7 @@ def read_properties(container: Container) -> dict:
         **_dates(container),
         "proprietes": properties(_xml(container, "docProps/custom.xml")),
         "configurations": configs,
+        "active_configuration": next(iter(saved_active)) if len(saved_active) == 1 else None,
         "cotes": dimensions(container)["cotes"],
         "liens": linked_texts(container),
         "apercu_png": png if png.startswith(PNG_SIGNATURE) else None,
