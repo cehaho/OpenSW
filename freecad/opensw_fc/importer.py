@@ -1,4 +1,4 @@
-"""One entry point for the three file kinds, and the helpers they share."""
+"""One entry point for the file kinds, and the helpers they share."""
 
 from __future__ import annotations
 
@@ -8,6 +8,9 @@ import time
 from pathlib import Path
 
 import FreeCAD
+
+#: A Parasolid transmit saved on its own, text or binary.
+PARASOLID = (".x_t", ".x_b", ".xmt_txt", ".xmt_bin")
 
 
 def say(text: str) -> None:
@@ -36,8 +39,12 @@ def load(filename: str, doc) -> None:
         from . import drawing
 
         drawing.load(path, doc)
+    elif suffix in PARASOLID:
+        from . import part
+
+        part.load_transmit(path, doc)
     else:
-        raise ValueError(f"not a SolidWorks file: {path.name}")
+        raise ValueError(f"not a SolidWorks or Parasolid file: {path.name}")
     doc.recompute()
     say(f"{path.name} read in {time.monotonic() - start:.1f} s")
     if FreeCAD.GuiUp:

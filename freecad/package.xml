@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no" ?>
 <package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
   <name>OpenSW</name>
-  <description>Open SolidWorks parts, assemblies and drawings (.SLDPRT, .SLDASM, .SLDDRW) without SolidWorks: exact B-rep geometry, colours and sketches.</description>
+  <description>Open SolidWorks parts, assemblies and drawings (.SLDPRT, .SLDASM, .SLDDRW) and Parasolid files (.x_t, .x_b) without SolidWorks: exact B-rep geometry, colours and sketches.</description>
   <version>0.1.0</version>
   <date>2026-11-25</date>
   <maintainer email="56485277+cehaho@users.noreply.github.com">cehaho</maintainer>
@@ -23,6 +23,8 @@
       <tag>sldprt</tag>
       <tag>sldasm</tag>
       <tag>slddrw</tag>
+      <tag>parasolid</tag>
+      <tag>x_t</tag>
     </workbench>
   </content>
 </package>

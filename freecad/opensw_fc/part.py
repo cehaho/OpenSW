@@ -5,6 +5,9 @@ the reader's direct writer and read back by FreeCAD's own importer. The
 sketches go in one folder, each labelled with the feature that absorbs it:
 SolidWorks features are not replayed, so the FeatureManager tree itself
 would only be a list of empty folders, and is not rebuilt.
+
+A Parasolid transmit saved on its own (``.x_t``, ``.x_b``) is read the same
+way: it is those bodies and nothing else, so it has no sketches.
 """
 
 from __future__ import annotations
@@ -22,7 +25,8 @@ MAX_NAME = 40
 
 
 def write_step(path, target) -> str:
-    """Write the part at *path* as STEP at *target*; say what went in."""
+    """Write the part or transmit at *path* as STEP at *target*; say what
+    went in."""
     from .sldprt.load import load_model
     from .sldprt.step import write_step as write
 
@@ -117,3 +121,10 @@ def load(path, doc) -> None:
             for obj in objects:
                 folder.addObject(obj)
     say(f"{len(made)} sketches ({sum(e['3d'] for e in reading.sketches)} in 3D)")
+
+
+def load_transmit(path, doc) -> None:
+    """A Parasolid transmit: its bodies. With no geometry there is nothing
+    else to show, so a failure is the import's."""
+    bodies = insert_step(lambda target: write_step(path, target), path.stem, doc)
+    split(doc, bodies)

@@ -1,4 +1,4 @@
-"""The module FreeCAD calls for a SolidWorks file (see ``Init.py``).
+"""The module FreeCAD calls for a SolidWorks or Parasolid file (see ``Init.py``).
 
 ``open`` and ``insert`` are the two entry points FreeCAD's import system
 expects; everything else lives in :mod:`opensw_fc`.
