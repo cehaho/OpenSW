@@ -67,6 +67,8 @@ class Composant:
     #: Original local placement, before composing with the parent.
     local_transform: tuple[float, ...] = ()
 
+    parents: tuple[tuple[str, tuple[float, ...]], ...] = ()
+
     def placer(self, p) -> tuple[float, float, float]:
         """A part point (m) in the assembly (m): ``p·R + t``."""
         m = self.matrice
@@ -144,7 +146,10 @@ def _arbre(xml: bytes) -> list[Composant]:
 
     out: list[Composant] = []
 
-    def descendre(modele, parent, prefixe, cache, supprime):
+    def descendre(modele, parent, prefixe, cache, supprime, parents, active):
+        if id(modele) in active:
+            raise AssemblyError("cyclic assembly reference")
+        active = active | {id(modele)}
         for ref in modele.findall(f"{NS}swReference"):
             nom = f"{ref.get('swName')}-{ref.get('swReferenceNumber')}"
             local_transform = _matrice(ref.get("swTransform"))
@@ -154,21 +159,21 @@ def _arbre(xml: bytes) -> list[Composant]:
             c = cache or ref.get("swHidden") == "YES"
             s = supprime or ref.get("swSuppressed") == "YES"
             if fichier is not None and fichier.get("swDocType") == "ASSEMBLY":
-                sous = modele_de(fichier.get("id"))
+                sous = enfant if enfant.find(f"{NS}swReference") is not None else modele_de(fichier.get("id"))
                 if sous is not None:
-                    descendre(sous, matrice, f"{prefixe}{nom}/", c, s)
+                    descendre(sous, matrice, f"{prefixe}{nom}/", c, s, parents + ((nom, local_transform),), active)
                     continue
             chemin = fichier.get("swPath", "") if fichier is not None else ""
             out.append(Composant(
                 f"{prefixe}{nom}", PureWindowsPath(chemin).name, matrice, c, s,
                 hors_nomenclature=ref.get("swExcludeFromBOM") == "YES",
                 configuration=ref.get("swConfigurationName") or "", source_path=chemin,
-                local_transform=local_transform))
+                local_transform=local_transform, parents=parents))
 
     modele = modele_de(tete.get("id"))
     if modele is None:
         raise AssemblyError("the assembly model has no reference")
-    descendre(modele, IDENTITE, "", False, False)
+    descendre(modele, IDENTITE, "", False, False, (), set())
     return out
 
 

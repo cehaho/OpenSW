@@ -14,8 +14,7 @@ The layout is the one SolidWorks writes itself (AP214):
 * each instance is a ``NEXT_ASSEMBLY_USAGE_OCCURRENCE``, with an
   ``ITEM_DEFINED_TRANSFORMATION`` from the part frame to the instance frame.
 
-Sub-assemblies are flattened: :mod:`sldprt.assembly` already composes their
-matrices, so every part is placed directly under the assembly.
+Nested occurrences retain each parent frame and the local transform of the leaf.
 """
 
 from __future__ import annotations
@@ -172,43 +171,60 @@ def write_step_assembly(asm: Assembly, parts: dict[str, Model], path: str | Path
     if not instances:
         reasons = [f"{part}: {reason}" for part, reason in report.refused.items()]
         reasons.extend(f"{part}: missing" for part in report.missing)
+        if not reasons:
+            reasons.append(f"{report.hidden} hidden, {report.suppressed} suppressed, {len(asm.composants)} total")
         raise StepError("no part of the assembly could be written"
                         + ("; " + "; ".join(reasons) if reasons else ""))
 
-    # The assembly: one frame per instance, the component matrix. A point is
-    # placed at p·R + t, so the part x axis goes to row 0 of R, z to row 2.
-    asm_frame = writer.add(f"AXIS2_PLACEMENT_3D ( 'NONE', #{origin}, $, $ )")
-    places = []
-    for c, _ in instances:
-        m = c.matrice
-        places.append(writer.add(
-            f"AXIS2_PLACEMENT_3D ( 'NONE', #{writer.point(m[9:12])}, "
-            f"#{writer.direction(m[6:9])}, #{writer.direction(m[0:3])} )"
-        ))
-    asm_shape = writer.add(
-        f"SHAPE_REPRESENTATION ( '{_string_literal(name)}', "
-        f"( #{asm_frame}, {', '.join(f'#{p}' for p in places)} ), #{context} )"
-    )
-    asm_definition = product(name, asm_shape, "assembly")
-    for k, ((c, (definition, shape, frame)), place) in enumerate(
-            zip(instances, places, strict=True), start=1):
-        transformation = writer.add(
-            f"ITEM_DEFINED_TRANSFORMATION ( 'NONE', 'NONE', #{place}, #{frame} )"
+    def write_group(name, children):
+        asm_frame = writer.add(f"AXIS2_PLACEMENT_3D ( 'NONE', #{origin}, $, $ )")
+        places = []
+        for _, m, _ in children:
+            places.append(writer.add(
+                f"AXIS2_PLACEMENT_3D ( 'NONE', #{writer.point(m[9:12])}, "
+                f"#{writer.direction(m[6:9])}, #{writer.direction(m[0:3])} )"
+            ))
+        asm_shape = writer.add(
+            f"SHAPE_REPRESENTATION ( '{_string_literal(name)}', "
+            f"( #{asm_frame}, {', '.join(f'#{p}' for p in places)} ), #{context} )"
         )
-        # SolidWorks' order: the assembly representation first, the part's
-        # second, like the two frames above.
-        relation = writer.add(
-            f"( REPRESENTATION_RELATIONSHIP ( 'NONE', 'NONE', #{asm_shape}, #{shape} ) "
-            f"REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION ( #{transformation} ) "
-            "SHAPE_REPRESENTATION_RELATIONSHIP ( ) )"
-        )
-        usage = writer.add(
-            f"NEXT_ASSEMBLY_USAGE_OCCURRENCE ( 'NAUO{k}', "
-            f"'{_string_literal(c.nom)}', ' ', #{asm_definition}, #{definition}, $ )"
-        )
-        usage_shape = writer.add(f"PRODUCT_DEFINITION_SHAPE ( 'NONE', 'NONE', #{usage} )")
-        writer.add(f"CONTEXT_DEPENDENT_SHAPE_REPRESENTATION ( #{relation}, #{usage_shape} )")
-        report.instances += 1
+        asm_definition = product(name, asm_shape, "assembly")
+        for (child_name, _, (definition, shape, frame)), place in zip(children, places, strict=True):
+            transformation = writer.add(
+                f"ITEM_DEFINED_TRANSFORMATION ( 'NONE', 'NONE', #{place}, #{frame} )"
+            )
+            # SolidWorks' order: the assembly representation first, the part's
+            # second, like the two frames above.
+            relation = writer.add(
+                f"( REPRESENTATION_RELATIONSHIP ( 'NONE', 'NONE', #{asm_shape}, #{shape} ) "
+                f"REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION ( #{transformation} ) "
+                "SHAPE_REPRESENTATION_RELATIONSHIP ( ) )"
+            )
+            usage = writer.add(
+                f"NEXT_ASSEMBLY_USAGE_OCCURRENCE ( 'NAUO{len(writer.lines)}', "
+                f"'{_string_literal(child_name)}', ' ', #{asm_definition}, #{definition}, $ )"
+            )
+            usage_shape = writer.add(f"PRODUCT_DEFINITION_SHAPE ( 'NONE', 'NONE', #{usage} )")
+            writer.add(f"CONTEXT_DEPENDENT_SHAPE_REPRESENTATION ( #{relation}, #{usage_shape} )")
+        return asm_definition, asm_shape, asm_frame
+
+    groups = {(): []}
+    frames = {}
+    for component, representation in instances:
+        path = ()
+        for label, matrix in component.parents:
+            path += (label,)
+            if path in frames and frames[path] != matrix:
+                raise StepError(f"conflicting subassembly placement: {path}")
+            frames[path] = matrix
+            groups.setdefault(path, [])
+        matrix = component.local_transform if path else component.matrice
+        groups[path].append((component.nom.rsplit("/", 1)[-1], matrix, representation))
+    for path in sorted(frames, key=len, reverse=True):
+        child = write_group(path[-1], groups[path])
+        groups[path[:-1]].append((path[-1], frames[path], child))
+    write_group(name, groups[()])
+    report.instances = len(instances)
     if styles:
         writer.add(
             "MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION ( '', ( "
