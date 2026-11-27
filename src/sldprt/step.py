@@ -912,15 +912,18 @@ class Translator:
             )
             return None
         try:
+            surfaces = [self.model.get(i) for i in node.values.get("surface", ())]
+            samples = _read[1] if _read and not blend else None
             fitted = evaluate.cylinder_intersection(self.model, node, points)
             if fitted is None:
-                poles, knots, mults = evaluate.interpolating_cubic(points)
-            else:
-                poles, knots, mults, error = fitted
-                self.report.worst_curve_error = max(self.report.worst_curve_error, error)
-        except evaluate.EvaluateError:
+                fitted = evaluate.projected_intersection(self.model, surfaces, points, samples)
+            if fitted is None:
+                raise evaluate.EvaluateError("intersection has no verified pair of carriers")
+            poles, knots, mults, error = fitted
+            self.report.worst_curve_error = max(self.report.worst_curve_error, error)
+        except evaluate.EvaluateError as error:
             self.report._note(
-                self.report.skipped_curves, "INTERSECTION (chart degenerate)"
+                self.report.skipped_curves, f"INTERSECTION ({error})"
             )
             return None
         self.report.charted_curves += 1
@@ -1048,11 +1051,16 @@ class Translator:
         if not reads:
             return None
         exact = [read for read in reads if not _on_a_blend(self.model, read[0])]
-        surface_node, spec, span, _along = (exact or reads)[0]
+        primary = (exact or reads)[0]
+        surface_node, spec, span, _along = primary
         try:
-            poles, knots, mults, error = evaluate.adaptive_cubic(
-                self.model, surface_node, spec, span=span
-            )
+            if len(reads) == 2 and reads[0][0].index != reads[1][0].index:
+                partner_read = reads[1] if primary is reads[0] else reads[0]
+                poles, knots, mults, error = evaluate.paired_surface_trim(self.model, primary, partner_read)
+            else:
+                poles, knots, mults, error = evaluate.adaptive_cubic(
+                    self.model, surface_node, spec, span=span
+                )
         except evaluate.EvaluateError:
             self.report._note(
                 self.report.skipped_curves, "(SP_CURVE will not evaluate)"

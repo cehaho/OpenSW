@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from bisect import bisect_right
 
 NULL_DOUBLE = -3.14158e13
 
@@ -937,6 +938,109 @@ def _fit_parametric_spans(point_at, edges, tolerance):
             times.append(t1)
     mults = [4] + [3] * (len(times) - 2) + [4]
     return poles, times, mults, worst
+
+
+def projected_intersection(model, surfaces, stations, samples):
+    """Fit to common points of both carriers, using the chart to select the branch."""
+    if len(surfaces) != 2 or not all(surfaces) or len(stations) < 2:
+        return None
+    points, params = [], []
+    for i, station in enumerate(stations):
+        if points and math.dist(points[-1], station) <= 1e-15:
+            continue
+        uv = []
+        for side, surface in enumerate(surfaces):
+            pair = samples[side][i] if samples and samples[side] is not None else None
+            if pair is None:
+                pair = surface_parameters(model, surface, station)
+            if pair is None:
+                seeds = [params[-1][2*side:2*side+2]] if params else []
+                seeds.append((0.0, 0.0))
+                for seed in seeds:
+                    found = _newton_inverse(model, surface, station, seed)
+                    if found and found[1] <= CURVE_TOLERANCE:
+                        pair = found[0]
+                        break
+                if pair is None:
+                    for seed in _grid_seeds(model, surface, station):
+                        found = _newton_inverse(model, surface, station, seed)
+                        if found and found[1] <= CURVE_TOLERANCE:
+                            pair = found[0]
+                            break
+            if pair is None:
+                raise EvaluateError("source intersection station could not be located on both carriers")
+            uv.extend(pair)
+        points.append(station)
+        params.append(uv)
+    if len(points) < 2:
+        return None
+    guide, times, _ = interpolating_cubic(points)
+
+    def point_at(t):
+        i = min(bisect_right(times, t) - 1, len(times) - 2)
+        fraction = (t - times[i]) / (times[i + 1] - times[i])
+        poles = guide[3*i:3*i+4]
+        anchor = _bezier_point(poles, fraction)
+        g = 1.0 - fraction
+        tangent = [g*g*(poles[1][k]-poles[0][k]) +
+                   2*g*fraction*(poles[2][k]-poles[1][k]) +
+                   fraction*fraction*(poles[3][k]-poles[2][k]) for k in range(3)]
+        guess = _lerp_parameters(surfaces, params[i], params[i+1], fraction, model)
+        projected = _intersection_newton(model, surfaces, anchor, tangent, guess)
+        if projected is None:
+            raise EvaluateError("intersection projection did not converge")
+        point, uv = projected
+        chord = math.dist(points[i], points[i+1])
+        reach = CURVE_TOLERANCE if fraction in (0, 1) else max(CURVE_TOLERANCE, chord / 4)
+        if math.dist(anchor, point) > reach:
+            raise EvaluateError("intersection projection left the source chart")
+        other = surface_point(model, surfaces[1], *uv[2:])
+        if math.dist(point, other) > CURVE_TOLERANCE/10:
+            raise EvaluateError("intersection carriers disagree after projection")
+        return point
+
+    return _fit_parametric_spans(point_at, times, CURVE_TOLERANCE/10)
+
+
+def paired_surface_trim(model, primary, partner):
+    """Use both saved trim traces as UV seeds on a common geometric edge."""
+    first, curve, span, _ = primary
+    other, second_curve, second_span, _ = partner
+    def domain(spec, trim):
+        return sorted(trim) if trim else (spec["knots"][spec["degree"]], spec["knots"][len(spec["poles"])])
+    low, high = domain(curve, span)
+    start, end = domain(second_curve, second_span)
+    if low >= high or start >= end:
+        raise EvaluateError("zero trim parameter span")
+    def uv(spec, t):
+        return evaluate_bspline(spec["degree"], spec["poles"], spec["weights"], spec["knots"], t)[:2]
+    def base(t):
+        return surface_point(model, first, *uv(curve, t))
+    endpoints = [surface_point(model, other, *uv(second_curve, t)) for t in (start, end)]
+    if math.dist(base(low), endpoints[1])+math.dist(base(high), endpoints[0]) < (
+            math.dist(base(low), endpoints[0])+math.dist(base(high), endpoints[1])):
+        start, end = end, start
+
+    def point_at(t):
+        anchor = base(t)
+        first_uv = uv(curve, t)
+        seed = uv(second_curve, start + (end-start)*(t-low)/(high-low))
+        inverse = _newton_inverse(model, other, anchor, seed)
+        if inverse is None:
+            raise EvaluateError("partner trim has no local inverse")
+        other_uv, miss = inverse
+        if miss <= CURVE_TOLERANCE / 10:
+            return anchor
+        delta = (high-low)*1e-6
+        before, after = base(max(low,t-delta)), base(min(high,t+delta))
+        tangent = [b-a for a,b in zip(before,after)]
+        found = _intersection_newton(model, (first,other), anchor, tangent, [*first_uv,*other_uv])
+        if found is None or math.dist(anchor, found[0]) > CURVE_TOLERANCE:
+            raise EvaluateError("partner trim and source trace disagree")
+        return found[0]
+
+    breaks = [low, *(t for t in curve["distinct"] if low < t < high), high]
+    return _fit_parametric_spans(point_at, breaks, CURVE_TOLERANCE)
 
 
 def cylinder_intersection(model, node, stations):

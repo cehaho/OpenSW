@@ -44,6 +44,52 @@ class SurfaceCurveTest(unittest.TestCase):
                 carriers, intersection, [*stations[:-1], wrong_station]
             ))
 
+    def test_projected_chart_meets_both_carriers_between_stations(self):
+        def surface(name, **kwargs):
+            return SimpleNamespace(name=name, values=kwargs)
+        common = {"axis":[0,0,1], "x_axis":[1,0,0], "pvec":[0,0,0]}
+        plane = surface("PLANE", normal=[0,0,1], x_axis=[1,0,0], pvec=[0,0,0])
+        for carrier, radius in [
+            (surface("CYLINDER", **common, radius=.004), .004),
+            (surface("CONE", **common, radius=.004, sin_half_angle=.6, cos_half_angle=.8), .004),
+            (surface("SPHERE", centre=[0,0,0], axis=[0,0,1], x_axis=[1,0,0], radius=.004), .004),
+            (surface("TORUS", centre=[0,0,0], axis=[0,0,1], x_axis=[1,0,0], major_radius=.005, minor_radius=.001), .006),
+        ]:
+            with self.subTest(carrier=carrier.name):
+                points = [[radius*math.cos(t),radius*math.sin(t),0] for t in (.2,.4,.6,.8)]
+                poles, _, _, _ = e.projected_intersection({}, [carrier,plane], points, None)
+                for j in range(0,len(poles)-1,3):
+                    for k in range(17):
+                        x,y,z = e._bezier_point(poles[j:j+4], k/16)
+                        self.assertLess(abs(z), 5e-9)
+                        self.assertLess(abs(math.hypot(x,y)-radius), 5e-9)
+
+    def test_revolved_bspline_and_offset_carriers_use_the_same_projector(self):
+        def node(name, **values):
+            return SimpleNamespace(name=name, values=values)
+        plane = node("PLANE", pvec=[0,0,0], normal=[0,0,1], x_axis=[1,0,0])
+        spline = node("B_SURFACE")
+        spline._releve_nurbs = {"u_knots":[0,0,1,1], "v_knots":[0,0,1,1],
+            "u_degree":1,"v_degree":1,"n_u":2,"n_v":2,"weights":None,
+            "net":[[[0,0,-.5],[0,0,.5]],[[1,0,-.5],[1,0,.5]]]}
+        offset = node("OFFSET_SURF", surface=1, offset=.01)
+        revolved = node("SPUN_SURF", profile=2, base=[0,0,0], axis=[0,0,1])
+        model = {1:spline, 2:node("LINE",pvec=[.02,0,0],direction=[0,0,1])}
+        for carrier, uv in [(spline,[(t,.5) for t in (.2,.4,.6)]),
+                            (offset,[(t,.5) for t in (.2,.4,.6)]),
+                            (revolved,[(0,t) for t in (.2,.4,.6)])]:
+            with self.subTest(carrier=carrier.name):
+                points = [e.surface_point(model, carrier, *pair) for pair in uv]
+                samples = [uv, [e.surface_parameters(model, plane, point) for point in points]]
+                poles, _, _, error = e.projected_intersection(model,[carrier,plane],points,samples)
+                self.assertLess(error,5e-9)
+                for j in range(0,len(poles)-1,3):
+                    for k in range(17):
+                        x,y,z = e._bezier_point(poles[j:j+4], k/16)
+                        self.assertLess(abs(z),5e-9)
+                        deviation = math.hypot(x,y)-.02 if carrier is revolved else y-points[0][1]
+                        self.assertLess(abs(deviation),5e-9)
+
     def test_curve_refines_one_small_region_without_relaxing_error(self):
         spec={"degree":1,"poles":[(0,0),(1,0)],"knots":[0,0,1,1],"distinct":[0,1]}
         def span(point_at,a,b,p,q):
