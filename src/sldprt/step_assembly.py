@@ -211,18 +211,18 @@ def write_step_assembly(asm: Assembly, parts: dict[str, Model], path: str | Path
     groups = {(): []}
     frames = {}
     for component, representation in instances:
-        path = ()
+        occurrence_path = ()
         for label, matrix in component.parents:
-            path += (label,)
-            if path in frames and frames[path] != matrix:
-                raise StepError(f"conflicting subassembly placement: {path}")
-            frames[path] = matrix
-            groups.setdefault(path, [])
-        matrix = component.local_transform if path else component.matrice
-        groups[path].append((component.nom.rsplit("/", 1)[-1], matrix, representation))
-    for path in sorted(frames, key=len, reverse=True):
-        child = write_group(path[-1], groups[path])
-        groups[path[:-1]].append((path[-1], frames[path], child))
+            occurrence_path += (label,)
+            if occurrence_path in frames and frames[occurrence_path] != matrix:
+                raise StepError(f"conflicting subassembly placement: {occurrence_path}")
+            frames[occurrence_path] = matrix
+            groups.setdefault(occurrence_path, [])
+        matrix = component.local_transform if occurrence_path else component.matrice
+        groups[occurrence_path].append((component.nom.rsplit("/", 1)[-1], matrix, representation))
+    for occurrence_path in sorted(frames, key=len, reverse=True):
+        child = write_group(occurrence_path[-1], groups[occurrence_path])
+        groups[occurrence_path[:-1]].append((occurrence_path[-1], frames[occurrence_path], child))
     write_group(name, groups[()])
     report.instances = len(instances)
     if styles:
