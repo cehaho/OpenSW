@@ -16,7 +16,7 @@ SCALE = 1000.0
 DIGITS = 17
 
 SURFACES = {"PLANE", "CYLINDER", "CONE", "SPHERE", "TORUS", "B_SURFACE",
-            "SWEPT_SURF", "OFFSET_SURF", "BLENDED_EDGE"}
+            "SWEPT_SURF", "SPUN_SURF", "OFFSET_SURF", "BLENDED_EDGE"}
 
 REPARAMETRISED = {"BLENDED_EDGE"}
 
@@ -132,6 +132,9 @@ def _same_sense(face_node: Node, surface_node: Node) -> str:
         surface_node.name != "OFFSET_SURF"
         and _sense(surface_node.values.get("sense")) == "-"
     )
+    # STEP revolution parameters are (angle, profile), the reverse of Parasolid.
+    if surface_node.name == "SPUN_SURF":
+        surface_reversed = not surface_reversed
     return ".F." if face_reversed != surface_reversed else ".T."
 
 
@@ -431,11 +434,22 @@ def write_surface(writer: Writer, node: Node, model=None) -> int | None:
         )
     if node.name == "B_SURFACE" and model is not None:
         return _write_bspline_surface(writer, model, node)
+    if node.name == "SPUN_SURF" and model is not None:
+        profile = model.get(values["profile"])
+        if profile is None:
+            return None
+        curve = _write_profile(writer, profile, model)
+        if curve is None:
+            return None
+        point = writer.point(values["base"])
+        direction = writer.direction(values["axis"])
+        axis = writer.add(f"AXIS1_PLACEMENT ( 'NONE', #{point}, #{direction} )")
+        return writer.add(f"SURFACE_OF_REVOLUTION ( 'NONE', #{curve}, #{axis} )")
     if node.name == "SWEPT_SURF" and model is not None:
         section = model.get(values.get("section", 0))
         if section is None:
             return None
-        curve = write_curve(writer, section, model)
+        curve = _write_profile(writer, section, model)
         if curve is None:
             return None
         sweep = writer.add(
@@ -605,6 +619,25 @@ def write_curve(writer: Writer, node: Node, model=None) -> int | None:
         basis = model.get(values.get("basis_curve", 0))
         return write_curve(writer, basis, model) if basis is not None else None
     return None
+
+
+def _write_profile(writer: Writer, node: Node, model) -> int | None:
+    """Preserve a generating curve's range even without EDGE_CURVE vertices."""
+    if node.name != "TRIMMED_CURVE":
+        return write_curve(writer, node, model)
+    values = node.values
+    basis = model.get(values["basis_curve"])
+    if basis is None or basis.name not in {"LINE", "CIRCLE", "ELLIPSE", "B_CURVE"}:
+        return None
+    curve = write_curve(writer, basis, model)
+    if curve is None:
+        return None
+    start, end = values["parm_1"], values["parm_2"]
+    sense = ".T." if end >= start else ".F."
+    return writer.add(
+        f"TRIMMED_CURVE ( 'NONE', #{curve}, ( PARAMETER_VALUE ( {_real(start)} ) ), "
+        f"( PARAMETER_VALUE ( {_real(end)} ) ), {sense}, .PARAMETER. )"
+    )
 
 
 def _write_blend(writer: Writer, model, node: Node) -> int | None:

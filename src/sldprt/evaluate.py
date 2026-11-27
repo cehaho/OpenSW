@@ -459,6 +459,14 @@ def _perpendicular(axis):
 
 
 def curve_point(model, node, t):
+    seen = set()
+    while node.name == "TRIMMED_CURVE":
+        if node.index in seen:
+            raise EvaluateError("cyclic trimmed curve")
+        seen.add(node.index)
+        node = model.get(node.values["basis_curve"])
+        if node is None:
+            raise EvaluateError("missing trimmed curve basis")
     values = node.values
     if node.name == "LINE":
         origin, direction = values["pvec"], _unit(values["direction"])
@@ -672,6 +680,20 @@ def surface_point(model, node, u, v):
                 + height * axis[i] for i in range(3)]
     if name == "B_SURFACE":
         return extended_bspline_surface(read_nurbs_surface(model, node), u, v)
+    if name == "SPUN_SURF":
+        profile = model.get(values["profile"])
+        if profile is None:
+            raise EvaluateError("a spun surface without a profile")
+        # Parasolid U follows the profile; V is the signed rotation in radians.
+        point = curve_point(model, profile, u)
+        axis = _unit(values["axis"])
+        base = values["base"]
+        radial = [x - y for x, y in zip(point, base)]
+        tangent = _cross(axis, radial)
+        axial = _dot(axis, radial)
+        c, s = math.cos(v), math.sin(v)
+        return [base[i] + radial[i]*c + tangent[i]*s + axis[i]*axial*(1-c)
+                for i in range(3)]
     if name == "SWEPT_SURF":
         section = model.get(values.get("section", 0))
         if section is None:
