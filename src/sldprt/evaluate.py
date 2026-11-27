@@ -481,6 +481,15 @@ def curve_point(model, node, t):
         a, b = values["major_radius"], values["minor_radius"]
         return [centre[i] + a * math.cos(t) * x[i] + b * math.sin(t) * y[i]
                 for i in range(3)]
+    if node.name == "SP_CURVE":
+        support = model.get(values.get("surface", 0))
+        basis = model.get(values.get("b_curve", 0))
+        if support is None or basis is None or basis.name != "B_CURVE":
+            raise EvaluateError("a surface curve without its carrier or UV basis")
+        spec = read_nurbs_curve(model, basis)
+        if spec["dim"] != 2:
+            raise EvaluateError("a surface curve whose basis is not two-dimensional")
+        return _composed(model, support, spec, t)
     if node.name == "B_CURVE":
         spec = getattr(node, _NURBS_CURVE_CACHE, None)
         if spec is None:
@@ -730,7 +739,7 @@ def _composed(model, surface_node, curve, t):
 # Metres. Keep fitting error below the 1e-5 mm STEP validation budget.
 CURVE_TOLERANCE = 1e-9
 
-MAX_BISECTIONS = 8
+MAX_FITTED_SEGMENTS = 4096
 
 
 def _bezier_span(model, surface_node, curve, t0, t1, start, end):
@@ -893,26 +902,30 @@ def adaptive_cubic(model, surface_node, curve, tolerance=CURVE_TOLERANCE,
         raise EvaluateError("a curve whose parameter span does not increase")
     breaks = [k for k in curve["distinct"] if first < k < last]
     edges = [first, *breaks, last]
+    segments = len(edges) - 1
+    if segments > MAX_FITTED_SEGMENTS:
+        raise EvaluateError("surface curve exceeds the segment limit")
 
     times = [first]
     poles = [_composed(model, surface_node, curve, first)]
     worst = 0.0
     for i in range(len(edges) - 1):
-        pending = [(edges[i], edges[i + 1], 0)]
+        pending = [(edges[i], edges[i + 1])]
         while pending:
-            t0, t1, depth = pending.pop()
+            t0, t1 = pending.pop()
             start = poles[-1]
             end = _composed(model, surface_node, curve, t1)
             p1, p2, error = _bezier_span(
                 model, surface_node, curve, t0, t1, start, end
             )
-            if error > tolerance and depth < MAX_BISECTIONS:
-                middle = (t0 + t1) / 2.0
-                pending.append((middle, t1, depth + 1))
-                pending.append((t0, middle, depth + 1))
-                continue
             if error > tolerance:
-                raise EvaluateError("surface curve exceeds the fitting tolerance at maximum depth")
+                middle = (t0 + t1) / 2.0
+                if segments >= MAX_FITTED_SEGMENTS or not t0 < middle < t1:
+                    raise EvaluateError("surface curve exceeds the fitting tolerance at the segment limit")
+                segments += 1
+                pending.append((middle, t1))
+                pending.append((t0, middle))
+                continue
             worst = max(worst, error)
             poles.extend([p1, p2, end])
             times.append(t1)
