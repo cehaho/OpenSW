@@ -742,10 +742,10 @@ CURVE_TOLERANCE = 1e-9
 MAX_FITTED_SEGMENTS = 4096
 
 
-def _bezier_span(model, surface_node, curve, t0, t1, start, end):
+def _bezier_span(point_at, t0, t1, start, end):
     third = (t1 - t0) / 3.0
-    pa = _composed(model, surface_node, curve, t0 + third)
-    pb = _composed(model, surface_node, curve, t0 + 2.0 * third)
+    pa = point_at(t0 + third)
+    pb = point_at(t0 + 2.0 * third)
     p1 = [(-5.0 * start[k] + 18.0 * pa[k] - 9.0 * pb[k] + 2.0 * end[k]) / 6.0
           for k in range(3)]
     p2 = [(2.0 * start[k] - 9.0 * pa[k] + 18.0 * pb[k] - 5.0 * end[k]) / 6.0
@@ -755,7 +755,7 @@ def _bezier_span(model, surface_node, curve, t0, t1, start, end):
     for i in range(5):
         f = (i + 0.5) / 5.0
         built = _bezier_point(poles, f)
-        true = _composed(model, surface_node, curve, t0 + (t1 - t0) * f)
+        true = point_at(t0 + (t1 - t0) * f)
         worst = max(worst, math.dist(built, true))
     return p1, p2, worst
 
@@ -901,22 +901,28 @@ def adaptive_cubic(model, surface_node, curve, tolerance=CURVE_TOLERANCE,
     if last <= first:
         raise EvaluateError("a curve whose parameter span does not increase")
     breaks = [k for k in curve["distinct"] if first < k < last]
-    edges = [first, *breaks, last]
+    return _fit_parametric_spans(
+        lambda t: _composed(model, surface_node, curve, t), [first, *breaks, last], tolerance
+    )
+
+
+def _fit_parametric_spans(point_at, edges, tolerance):
+    first = edges[0]
     segments = len(edges) - 1
     if segments > MAX_FITTED_SEGMENTS:
         raise EvaluateError("surface curve exceeds the segment limit")
 
     times = [first]
-    poles = [_composed(model, surface_node, curve, first)]
+    poles = [point_at(first)]
     worst = 0.0
     for i in range(len(edges) - 1):
         pending = [(edges[i], edges[i + 1])]
         while pending:
             t0, t1 = pending.pop()
             start = poles[-1]
-            end = _composed(model, surface_node, curve, t1)
+            end = point_at(t1)
             p1, p2, error = _bezier_span(
-                model, surface_node, curve, t0, t1, start, end
+                point_at, t0, t1, start, end
             )
             if error > tolerance:
                 middle = (t0 + t1) / 2.0
@@ -931,6 +937,70 @@ def adaptive_cubic(model, surface_node, curve, tolerance=CURVE_TOLERANCE,
             times.append(t1)
     mults = [4] + [3] * (len(times) - 2) + [4]
     return poles, times, mults, worst
+
+
+def cylinder_intersection(model, node, stations):
+    """Fit a single-valued branch using angle on the smaller cylinder."""
+    carriers = [model.get(index) for index in node.values.get("surface", ())]
+    if len(carriers) != 2 or any(s is None or s.name != "CYLINDER" for s in carriers):
+        return None
+    first, second = sorted(carriers, key=lambda s: s.values["radius"])
+    origin, axis, x_axis, y_axis = _frame(first.values, "pvec", "axis")
+    centre, normal, _, _ = _frame(second.values, "pvec", "axis")
+    radius = first.values["radius"]
+    other_radius = second.values["radius"]
+
+    def perpendicular(vector):
+        height = _dot(vector, normal)
+        return [v - height * n for v, n in zip(vector, normal)]
+
+    projected_axis = perpendicular(axis)
+    quadratic = _dot(projected_axis, projected_axis)
+    if quadratic < 1e-10:
+        return None
+
+    def intersections(angle):
+        base = [o + radius * (math.cos(angle) * x + math.sin(angle) * y)
+                for o, x, y in zip(origin, x_axis, y_axis)]
+        offset = perpendicular([b - c for b, c in zip(base, centre)])
+        linear = _dot(offset, projected_axis)
+        discriminant = linear**2 - quadratic * (_dot(offset, offset) - other_radius**2)
+        if discriminant <= 0:
+            return None
+        delta = math.sqrt(discriminant)
+        return [[b + n * (-linear + sign * delta) / quadratic for b, n in zip(base, axis)]
+                for sign in (-1, 1)]
+
+    angles = []
+    branch = None
+    for station in stations:
+        offset = [p - o for p, o in zip(station, origin)]
+        angle = math.atan2(_dot(offset, y_axis), _dot(offset, x_axis))
+        if angles:
+            angle += round((angles[-1] - angle) / math.tau) * math.tau
+        points = intersections(angle)
+        if points is None:
+            return None
+        side = min(range(2), key=lambda i: math.dist(station, points[i]))
+        if math.dist(station, points[side]) > CURVE_TOLERANCE or branch not in (None, side):
+            return None
+        branch = side
+        if not angles or angles[-1] != angle:
+            angles.append(angle)
+    if len(angles) < 2:
+        return None
+    direction = 1 if angles[-1] > angles[0] else -1
+    spans = [direction * (angle - angles[0]) for angle in angles]
+    if any(not 0 < b - a < math.pi for a, b in zip(spans, spans[1:])):
+        return None
+
+    def point_at(parameter):
+        points = intersections(angles[0] + direction * parameter)
+        if points is None:
+            raise EvaluateError("cylinder intersection crosses a branch endpoint")
+        return points[branch]
+
+    return _fit_parametric_spans(point_at, spans, CURVE_TOLERANCE / 10)
 
 
 def _limit_kind(limit):

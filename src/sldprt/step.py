@@ -912,7 +912,12 @@ class Translator:
             )
             return None
         try:
-            poles, knots, mults = evaluate.interpolating_cubic(points)
+            fitted = evaluate.cylinder_intersection(self.model, node, points)
+            if fitted is None:
+                poles, knots, mults = evaluate.interpolating_cubic(points)
+            else:
+                poles, knots, mults, error = fitted
+                self.report.worst_curve_error = max(self.report.worst_curve_error, error)
         except evaluate.EvaluateError:
             self.report._note(
                 self.report.skipped_curves, "INTERSECTION (chart degenerate)"
