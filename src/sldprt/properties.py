@@ -45,6 +45,7 @@ from itertools import pairwise
 from xml.etree import ElementTree
 
 from .container import Container
+from .features import _payload
 
 #: The summary: our key, the name SolidWorks writes.
 RESUME = {
@@ -76,11 +77,11 @@ _NS_CORE = {"dc": "http://purl.org/dc/elements/1.1/",
 
 
 def _xml(container: Container, name: str):
-    blob = container.get(name)
-    if blob is None:
+    stream = _payload(container, name)
+    if stream is None:
         return None
     try:
-        return ElementTree.fromstring(bytes(blob.data))
+        return ElementTree.fromstring(stream[1])
     except ElementTree.ParseError:
         return None
 
@@ -395,20 +396,80 @@ def sheets(container: Container) -> list[dict]:
     return out
 
 
+def _manager_configurations(container: Container) -> list[tuple[int, str]]:
+    """Part configuration nodes in the legacy MFC configuration manager.
+
+    The name belongs to moNodeName_c. After its CString and the two
+    node flag words comes the configuration ID used in Config-N-Partition.
+    The first object declares both classes, later objects reference them.
+    """
+    stream = _payload(container, "Contents/CMgr")
+    if not stream:
+        return []
+    data = bytes(stream[1])
+
+    def class_tag(name: bytes) -> bytes:
+        return struct.pack("<HHH", 0xffff, 1, len(name)) + name
+
+    if not data.startswith(class_tag(b"moConfigurationMgr_c")):
+        return []
+    first = class_tag(b"moPartConfiguration_c") + class_tag(b"moNodeName_c")
+    start = data.find(first)
+    if start < 0:
+        return []
+    positions = [start + len(first)]
+    refs = bytes.fromhex("03800580")
+    positions.extend(m.end() for m in re.compile(refs).finditer(data, positions[0]))
+    rows = []
+    for pos in positions:
+        string = _CSTRING.match(data, pos)
+        if not string:
+            return []
+        size = string[1][0]
+        end = string.end() + 2 * size
+        if not 0 < size < 255 or end + 12 > len(data):
+            return []
+        _, marker, number = struct.unpack_from("<III", data, end)
+        if marker != 0x40000000:
+            return []
+        try:
+            name = data[string.end():end].decode("utf-16-le")
+        except UnicodeDecodeError:
+            return []
+        if not name or "\x00" in name or any(n == number or s == name for n, s in rows):
+            return []
+        rows.append((number, name))
+    header = _payload(container, "Contents/CMgrHdr2")
+    if header:
+        tag = class_tag(b"dmConfigMgrHeader_c")
+        data = header[1]
+        if not data.startswith(tag) or len(data) < len(tag) + 2:
+            return []
+        if struct.unpack_from("<H", data, len(tag))[0] != len(rows):
+            return []
+    return rows
+
+
 def read_properties(container: Container) -> dict:
     """Everything the document says about itself, read, never computed."""
     info = _information(container)
     configs_found = []
+    saved_active = set()
     root = _xml(container, "swXmlContents/Features")
     if root is not None:
+        saved_active = {e.get("swName") for e in root.iter(f"{{{_NS_SW}}}swConfiguration")
+                        if e.get("swMostRecentConfiguration") == "YES" and e.get("swName")}
         configs_found = [(int(e.get("swID")), e.get("swName"))
                          for e in root.iter(f"{{{_NS_SW}}}swConfiguration")
                          if (e.get("swID") or "").isdigit()]
-    streams = {b.name for b in container.blobs}
+    if not configs_found:
+        configs_found = _manager_configurations(container)
+    streams = {b.name.removesuffix("__ZLB") for b in container.blobs}
     configs = []
     for n, name in configs_found:
         mass = info.get(f"SW-MassProp-Config-{n}")
         configs.append({
+            "id": n,
             "nom": name,
             "proprietes": properties(_xml(container, f"docProps/Config-{n}-Properties.xml")),
             # Was this configuration's geometry saved in the file?
@@ -426,6 +487,7 @@ def read_properties(container: Container) -> dict:
         **_dates(container),
         "proprietes": properties(_xml(container, "docProps/custom.xml")),
         "configurations": configs,
+        "active_configuration": next(iter(saved_active)) if len(saved_active) == 1 else None,
         "cotes": dimensions(container)["cotes"],
         "liens": linked_texts(container),
         "apercu_png": png if png.startswith(PNG_SIGNATURE) else None,

@@ -168,7 +168,7 @@ def is_partition_stream(name: str) -> bool:
 
 def main_partition(container: Container) -> Transmit | None:
     for stream, transmits in extract_transmits(container).items():
-        if not _PARTITION_STREAM.search(stream):
+        if not _PARTITION_STREAM.search(stream.removesuffix("__ZLB")):
             continue
         for transmit in transmits:
             if transmit.guise == "partition":

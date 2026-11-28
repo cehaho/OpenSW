@@ -14,8 +14,7 @@ The layout is the one SolidWorks writes itself (AP214):
 * each instance is a ``NEXT_ASSEMBLY_USAGE_OCCURRENCE``, with an
   ``ITEM_DEFINED_TRANSFORMATION`` from the part frame to the instance frame.
 
-Sub-assemblies are flattened: :mod:`sldprt.assembly` already composes their
-matrices, so every part is placed directly under the assembly.
+Nested occurrences retain each parent frame and the local transform of the leaf.
 """
 
 from __future__ import annotations
@@ -106,11 +105,11 @@ def write_step_assembly(asm: Assembly, parts: dict[str, Model], path: str | Path
         translator = Translator(model, writer)
         solids, sheets = [], []
         partition = getattr(model, PARTITION_MARK, False)
+        surface_part = not any(model.is_solid_body(node) for node in model.bodies)
         for body in model.bodies:
             if not model.is_solid_body(body):
-                # As for a single part: the sheets of a partition are left
-                # out, those of a transmit are written.
-                if partition:
+                # Match write_step's policy for surface-only part definitions.
+                if partition and not surface_part:
                     translator.report.partition_sheets += 1
                     continue
                 n = translator.sheet(body)
@@ -120,16 +119,16 @@ def write_step_assembly(asm: Assembly, parts: dict[str, Model], path: str | Path
             n = translator.body(body)
             if n is not None:
                 solids.append(f"#{n}")
-        if not solids:
+        if not solids and not sheets:
             writer.rewind(mark)
-            report.refused[label] = translator.report.refusals() or "no solid body"
+            report.refused[label] = translator.report.refusals() or "no transferable body"
             written[key] = None
             return None
         frame = writer.add(f"AXIS2_PLACEMENT_3D ( 'NONE', #{origin}, $, $ )")
         brep = writer.add(
             "ADVANCED_BREP_SHAPE_REPRESENTATION ( 'NONE', "
             f"( #{frame}, {', '.join(solids)} ), #{context} )"
-        )
+        ) if solids else None
         if sheets:
             model_item = writer.add(
                 f"SHELL_BASED_SURFACE_MODEL ( 'NONE', ( {', '.join(sheets)} ) )"
@@ -138,9 +137,12 @@ def write_step_assembly(asm: Assembly, parts: dict[str, Model], path: str | Path
                 "MANIFOLD_SURFACE_SHAPE_REPRESENTATION ( 'NONE', "
                 f"( #{frame}, #{model_item} ), #{context} )"
             )
-            writer.add(
-                f"SHAPE_REPRESENTATION_RELATIONSHIP ( 'NONE', '', #{brep}, #{surfaces} )"
-            )
+            if brep is None:
+                brep = surfaces
+            else:
+                writer.add(
+                    f"SHAPE_REPRESENTATION_RELATIONSHIP ( 'NONE', '', #{brep}, #{surfaces} )"
+                )
         shape = writer.add(
             f"SHAPE_REPRESENTATION ( '{_string_literal(Path(label).stem)}', "
             f"( #{frame} ), #{context} )"
@@ -167,44 +169,62 @@ def write_step_assembly(asm: Assembly, parts: dict[str, Model], path: str | Path
         if done is not None:
             instances.append((c, done))
     if not instances:
+        reasons = [f"{part}: {reason}" for part, reason in report.refused.items()]
+        reasons.extend(f"{part}: missing" for part in report.missing)
+        if not reasons:
+            reasons.append(f"{report.hidden} hidden, {report.suppressed} suppressed, {len(asm.composants)} total")
         raise StepError("no part of the assembly could be written"
-                        + (f"; missing: {', '.join(report.missing)}"
-                           if report.missing else ""))
+                        + ("; " + "; ".join(reasons) if reasons else ""))
 
-    # The assembly: one frame per instance, the component matrix. A point is
-    # placed at p·R + t, so the part x axis goes to row 0 of R, z to row 2.
-    asm_frame = writer.add(f"AXIS2_PLACEMENT_3D ( 'NONE', #{origin}, $, $ )")
-    places = []
-    for c, _ in instances:
-        m = c.matrice
-        places.append(writer.add(
-            f"AXIS2_PLACEMENT_3D ( 'NONE', #{writer.point(m[9:12])}, "
-            f"#{writer.direction(m[6:9])}, #{writer.direction(m[0:3])} )"
-        ))
-    asm_shape = writer.add(
-        f"SHAPE_REPRESENTATION ( '{_string_literal(name)}', "
-        f"( #{asm_frame}, {', '.join(f'#{p}' for p in places)} ), #{context} )"
-    )
-    asm_definition = product(name, asm_shape, "assembly")
-    for k, ((c, (definition, shape, frame)), place) in enumerate(
-            zip(instances, places, strict=True), start=1):
-        transformation = writer.add(
-            f"ITEM_DEFINED_TRANSFORMATION ( 'NONE', 'NONE', #{place}, #{frame} )"
+    def write_group(name, children):
+        asm_frame = writer.add(f"AXIS2_PLACEMENT_3D ( 'NONE', #{origin}, $, $ )")
+        places = []
+        for _, m, _ in children:
+            places.append(writer.add(
+                f"AXIS2_PLACEMENT_3D ( 'NONE', #{writer.point(m[9:12])}, "
+                f"#{writer.direction(m[6:9])}, #{writer.direction(m[0:3])} )"
+            ))
+        asm_shape = writer.add(
+            f"SHAPE_REPRESENTATION ( '{_string_literal(name)}', "
+            f"( #{asm_frame}, {', '.join(f'#{p}' for p in places)} ), #{context} )"
         )
-        # SolidWorks' order: the assembly representation first, the part's
-        # second, like the two frames above.
-        relation = writer.add(
-            f"( REPRESENTATION_RELATIONSHIP ( 'NONE', 'NONE', #{asm_shape}, #{shape} ) "
-            f"REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION ( #{transformation} ) "
-            "SHAPE_REPRESENTATION_RELATIONSHIP ( ) )"
-        )
-        usage = writer.add(
-            f"NEXT_ASSEMBLY_USAGE_OCCURRENCE ( 'NAUO{k}', "
-            f"'{_string_literal(c.nom)}', ' ', #{asm_definition}, #{definition}, $ )"
-        )
-        usage_shape = writer.add(f"PRODUCT_DEFINITION_SHAPE ( 'NONE', 'NONE', #{usage} )")
-        writer.add(f"CONTEXT_DEPENDENT_SHAPE_REPRESENTATION ( #{relation}, #{usage_shape} )")
-        report.instances += 1
+        asm_definition = product(name, asm_shape, "assembly")
+        for (child_name, _, (definition, shape, frame)), place in zip(children, places, strict=True):
+            transformation = writer.add(
+                f"ITEM_DEFINED_TRANSFORMATION ( 'NONE', 'NONE', #{place}, #{frame} )"
+            )
+            # SolidWorks' order: the assembly representation first, the part's
+            # second, like the two frames above.
+            relation = writer.add(
+                f"( REPRESENTATION_RELATIONSHIP ( 'NONE', 'NONE', #{asm_shape}, #{shape} ) "
+                f"REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION ( #{transformation} ) "
+                "SHAPE_REPRESENTATION_RELATIONSHIP ( ) )"
+            )
+            usage = writer.add(
+                f"NEXT_ASSEMBLY_USAGE_OCCURRENCE ( 'NAUO{len(writer.lines)}', "
+                f"'{_string_literal(child_name)}', ' ', #{asm_definition}, #{definition}, $ )"
+            )
+            usage_shape = writer.add(f"PRODUCT_DEFINITION_SHAPE ( 'NONE', 'NONE', #{usage} )")
+            writer.add(f"CONTEXT_DEPENDENT_SHAPE_REPRESENTATION ( #{relation}, #{usage_shape} )")
+        return asm_definition, asm_shape, asm_frame
+
+    groups = {(): []}
+    frames = {}
+    for component, representation in instances:
+        occurrence_path = ()
+        for label, matrix in component.parents:
+            occurrence_path += (label,)
+            if occurrence_path in frames and frames[occurrence_path] != matrix:
+                raise StepError(f"conflicting subassembly placement: {occurrence_path}")
+            frames[occurrence_path] = matrix
+            groups.setdefault(occurrence_path, [])
+        matrix = component.local_transform if occurrence_path else component.matrice
+        groups[occurrence_path].append((component.nom.rsplit("/", 1)[-1], matrix, representation))
+    for occurrence_path in sorted(frames, key=len, reverse=True):
+        child = write_group(occurrence_path[-1], groups[occurrence_path])
+        groups[occurrence_path[:-1]].append((occurrence_path[-1], frames[occurrence_path], child))
+    write_group(name, groups[()])
+    report.instances = len(instances)
     if styles:
         writer.add(
             "MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION ( '', ( "

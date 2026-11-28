@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from bisect import bisect_right
 
 NULL_DOUBLE = -3.14158e13
 
@@ -459,6 +460,14 @@ def _perpendicular(axis):
 
 
 def curve_point(model, node, t):
+    seen = set()
+    while node.name == "TRIMMED_CURVE":
+        if node.index in seen:
+            raise EvaluateError("cyclic trimmed curve")
+        seen.add(node.index)
+        node = model.get(node.values["basis_curve"])
+        if node is None:
+            raise EvaluateError("missing trimmed curve basis")
     values = node.values
     if node.name == "LINE":
         origin, direction = values["pvec"], _unit(values["direction"])
@@ -473,6 +482,15 @@ def curve_point(model, node, t):
         a, b = values["major_radius"], values["minor_radius"]
         return [centre[i] + a * math.cos(t) * x[i] + b * math.sin(t) * y[i]
                 for i in range(3)]
+    if node.name == "SP_CURVE":
+        support = model.get(values.get("surface", 0))
+        basis = model.get(values.get("b_curve", 0))
+        if support is None or basis is None or basis.name != "B_CURVE":
+            raise EvaluateError("a surface curve without its carrier or UV basis")
+        spec = read_nurbs_curve(model, basis)
+        if spec["dim"] != 2:
+            raise EvaluateError("a surface curve whose basis is not two-dimensional")
+        return _composed(model, support, spec, t)
     if node.name == "B_CURVE":
         spec = getattr(node, _NURBS_CURVE_CACHE, None)
         if spec is None:
@@ -495,6 +513,14 @@ POLE_RETREAT = 1.0e-5
 
 
 def _uv_domain(model, node):
+    if node.name == "SPUN_SURF":
+        profile = model.get(node.values.get("profile", 0))
+        if profile and profile.name == "B_CURVE":
+            curve = read_nurbs_curve(model, profile)
+            return ((curve["knots"][curve["degree"]], curve["knots"][len(curve["poles"])]),
+                    (0.0, 2.0 * math.pi))
+        if profile and profile.name in ("CIRCLE", "ELLIPSE"):
+            return ((0.0, 2.0 * math.pi), (0.0, 2.0 * math.pi))
     if node.name != "B_SURFACE":
         return None
     spec = read_nurbs_surface(model, node)
@@ -572,6 +598,7 @@ def _normal_from_partials(model, node, u, v):
 
 
 PERIODS = {
+    "SPUN_SURF": (None, 2.0 * math.pi),
     "CYLINDER": (2.0 * math.pi, None),
     "CONE": (2.0 * math.pi, None),
     "SPHERE": (2.0 * math.pi, None),
@@ -672,6 +699,20 @@ def surface_point(model, node, u, v):
                 + height * axis[i] for i in range(3)]
     if name == "B_SURFACE":
         return extended_bspline_surface(read_nurbs_surface(model, node), u, v)
+    if name == "SPUN_SURF":
+        profile = model.get(values["profile"])
+        if profile is None:
+            raise EvaluateError("a spun surface without a profile")
+        # Parasolid U follows the profile; V is the signed rotation in radians.
+        point = curve_point(model, profile, u)
+        axis = _unit(values["axis"])
+        base = values["base"]
+        radial = [x - y for x, y in zip(point, base)]
+        tangent = _cross(axis, radial)
+        axial = _dot(axis, radial)
+        c, s = math.cos(v), math.sin(v)
+        return [base[i] + radial[i]*c + tangent[i]*s + axis[i]*axial*(1-c)
+                for i in range(3)]
     if name == "SWEPT_SURF":
         section = model.get(values.get("section", 0))
         if section is None:
@@ -705,15 +746,16 @@ def _composed(model, surface_node, curve, t):
     return surface_point(model, surface_node, u, v)
 
 
-CURVE_TOLERANCE = 1e-6
+# Metres. Keep fitting error below the 1e-5 mm STEP validation budget.
+CURVE_TOLERANCE = 1e-9
 
-MAX_BISECTIONS = 8
+MAX_FITTED_SEGMENTS = 4096
 
 
-def _bezier_span(model, surface_node, curve, t0, t1, start, end):
+def _bezier_span(point_at, t0, t1, start, end):
     third = (t1 - t0) / 3.0
-    pa = _composed(model, surface_node, curve, t0 + third)
-    pb = _composed(model, surface_node, curve, t0 + 2.0 * third)
+    pa = point_at(t0 + third)
+    pb = point_at(t0 + 2.0 * third)
     p1 = [(-5.0 * start[k] + 18.0 * pa[k] - 9.0 * pb[k] + 2.0 * end[k]) / 6.0
           for k in range(3)]
     p2 = [(2.0 * start[k] - 9.0 * pa[k] + 18.0 * pb[k] - 5.0 * end[k]) / 6.0
@@ -723,7 +765,7 @@ def _bezier_span(model, surface_node, curve, t0, t1, start, end):
     for i in range(5):
         f = (i + 0.5) / 5.0
         built = _bezier_point(poles, f)
-        true = _composed(model, surface_node, curve, t0 + (t1 - t0) * f)
+        true = point_at(t0 + (t1 - t0) * f)
         worst = max(worst, math.dist(built, true))
     return p1, p2, worst
 
@@ -869,30 +911,211 @@ def adaptive_cubic(model, surface_node, curve, tolerance=CURVE_TOLERANCE,
     if last <= first:
         raise EvaluateError("a curve whose parameter span does not increase")
     breaks = [k for k in curve["distinct"] if first < k < last]
-    edges = [first, *breaks, last]
+    return _fit_parametric_spans(
+        lambda t: _composed(model, surface_node, curve, t), [first, *breaks, last], tolerance
+    )
+
+
+def _fit_parametric_spans(point_at, edges, tolerance):
+    first = edges[0]
+    segments = len(edges) - 1
+    if segments > MAX_FITTED_SEGMENTS:
+        raise EvaluateError("surface curve exceeds the segment limit")
 
     times = [first]
-    poles = [_composed(model, surface_node, curve, first)]
+    poles = [point_at(first)]
     worst = 0.0
     for i in range(len(edges) - 1):
-        pending = [(edges[i], edges[i + 1], 0)]
+        pending = [(edges[i], edges[i + 1])]
         while pending:
-            t0, t1, depth = pending.pop()
+            t0, t1 = pending.pop()
             start = poles[-1]
-            end = _composed(model, surface_node, curve, t1)
+            end = point_at(t1)
             p1, p2, error = _bezier_span(
-                model, surface_node, curve, t0, t1, start, end
+                point_at, t0, t1, start, end
             )
-            if error > tolerance and depth < MAX_BISECTIONS:
+            if error > tolerance:
                 middle = (t0 + t1) / 2.0
-                pending.append((middle, t1, depth + 1))
-                pending.append((t0, middle, depth + 1))
+                if segments >= MAX_FITTED_SEGMENTS or not t0 < middle < t1:
+                    raise EvaluateError("surface curve exceeds the fitting tolerance at the segment limit")
+                segments += 1
+                pending.append((middle, t1))
+                pending.append((t0, middle))
                 continue
             worst = max(worst, error)
             poles.extend([p1, p2, end])
             times.append(t1)
     mults = [4] + [3] * (len(times) - 2) + [4]
     return poles, times, mults, worst
+
+
+def projected_intersection(model, surfaces, stations, samples):
+    """Fit to common points of both carriers, using the chart to select the branch."""
+    if len(surfaces) != 2 or not all(surfaces) or len(stations) < 2:
+        return None
+    points, params = [], []
+    for i, station in enumerate(stations):
+        if points and math.dist(points[-1], station) <= 1e-15:
+            continue
+        uv = []
+        for side, surface in enumerate(surfaces):
+            pair = samples[side][i] if samples and samples[side] is not None else None
+            if pair is None:
+                pair = surface_parameters(model, surface, station)
+            if pair is None:
+                seeds = [params[-1][2*side:2*side+2]] if params else []
+                seeds.append((0.0, 0.0))
+                for seed in seeds:
+                    found = _newton_inverse(model, surface, station, seed)
+                    if found and found[1] <= CURVE_TOLERANCE:
+                        pair = found[0]
+                        break
+                if pair is None:
+                    for seed in _grid_seeds(model, surface, station):
+                        found = _newton_inverse(model, surface, station, seed)
+                        if found and found[1] <= CURVE_TOLERANCE:
+                            pair = found[0]
+                            break
+            if pair is None:
+                raise EvaluateError("source intersection station could not be located on both carriers")
+            uv.extend(pair)
+        points.append(station)
+        params.append(uv)
+    if len(points) < 2:
+        return None
+    guide, times, _ = interpolating_cubic(points)
+
+    def point_at(t):
+        i = min(bisect_right(times, t) - 1, len(times) - 2)
+        fraction = (t - times[i]) / (times[i + 1] - times[i])
+        poles = guide[3*i:3*i+4]
+        anchor = _bezier_point(poles, fraction)
+        g = 1.0 - fraction
+        tangent = [g*g*(poles[1][k]-poles[0][k]) +
+                   2*g*fraction*(poles[2][k]-poles[1][k]) +
+                   fraction*fraction*(poles[3][k]-poles[2][k]) for k in range(3)]
+        guess = _lerp_parameters(surfaces, params[i], params[i+1], fraction, model)
+        projected = _intersection_newton(model, surfaces, anchor, tangent, guess)
+        if projected is None:
+            raise EvaluateError("intersection projection did not converge")
+        point, uv = projected
+        chord = math.dist(points[i], points[i+1])
+        reach = CURVE_TOLERANCE if fraction in (0, 1) else max(CURVE_TOLERANCE, chord / 4)
+        if math.dist(anchor, point) > reach:
+            raise EvaluateError("intersection projection left the source chart")
+        other = surface_point(model, surfaces[1], *uv[2:])
+        if math.dist(point, other) > CURVE_TOLERANCE/10:
+            raise EvaluateError("intersection carriers disagree after projection")
+        return point
+
+    # STEP readback also constructs pcurves on the two carriers. Reserve margin
+    # for that projection in addition to the cubic's sampled interpolation error.
+    return _fit_parametric_spans(point_at, times, CURVE_TOLERANCE/100)
+
+
+def paired_surface_trim(model, primary, partner):
+    """Use both saved trim traces as UV seeds on a common geometric edge."""
+    first, curve, span, _ = primary
+    other, second_curve, second_span, _ = partner
+    def domain(spec, trim):
+        return sorted(trim) if trim else (spec["knots"][spec["degree"]], spec["knots"][len(spec["poles"])])
+    low, high = domain(curve, span)
+    start, end = domain(second_curve, second_span)
+    if low >= high or start >= end:
+        raise EvaluateError("zero trim parameter span")
+    def uv(spec, t):
+        return evaluate_bspline(spec["degree"], spec["poles"], spec["weights"], spec["knots"], t)[:2]
+    def base(t):
+        return surface_point(model, first, *uv(curve, t))
+    endpoints = [surface_point(model, other, *uv(second_curve, t)) for t in (start, end)]
+    if math.dist(base(low), endpoints[1])+math.dist(base(high), endpoints[0]) < (
+            math.dist(base(low), endpoints[0])+math.dist(base(high), endpoints[1])):
+        start, end = end, start
+
+    def point_at(t):
+        anchor = base(t)
+        first_uv = uv(curve, t)
+        seed = uv(second_curve, start + (end-start)*(t-low)/(high-low))
+        inverse = _newton_inverse(model, other, anchor, seed)
+        if inverse is None:
+            raise EvaluateError("partner trim has no local inverse")
+        other_uv, miss = inverse
+        if miss <= CURVE_TOLERANCE / 10:
+            return anchor
+        delta = (high-low)*1e-6
+        before, after = base(max(low,t-delta)), base(min(high,t+delta))
+        tangent = [b-a for a,b in zip(before,after)]
+        found = _intersection_newton(model, (first,other), anchor, tangent, [*first_uv,*other_uv])
+        if found is None or math.dist(anchor, found[0]) > CURVE_TOLERANCE:
+            raise EvaluateError("partner trim and source trace disagree")
+        return found[0]
+
+    breaks = [low, *(t for t in curve["distinct"] if low < t < high), high]
+    return _fit_parametric_spans(point_at, breaks, CURVE_TOLERANCE)
+
+
+def cylinder_intersection(model, node, stations):
+    """Fit a single-valued branch using angle on the smaller cylinder."""
+    carriers = [model.get(index) for index in node.values.get("surface", ())]
+    if len(carriers) != 2 or any(s is None or s.name != "CYLINDER" for s in carriers):
+        return None
+    first, second = sorted(carriers, key=lambda s: s.values["radius"])
+    origin, axis, x_axis, y_axis = _frame(first.values, "pvec", "axis")
+    centre, normal, _, _ = _frame(second.values, "pvec", "axis")
+    radius = first.values["radius"]
+    other_radius = second.values["radius"]
+
+    def perpendicular(vector):
+        height = _dot(vector, normal)
+        return [v - height * n for v, n in zip(vector, normal)]
+
+    projected_axis = perpendicular(axis)
+    quadratic = _dot(projected_axis, projected_axis)
+    if quadratic < 1e-10:
+        return None
+
+    def intersections(angle):
+        base = [o + radius * (math.cos(angle) * x + math.sin(angle) * y)
+                for o, x, y in zip(origin, x_axis, y_axis)]
+        offset = perpendicular([b - c for b, c in zip(base, centre)])
+        linear = _dot(offset, projected_axis)
+        discriminant = linear**2 - quadratic * (_dot(offset, offset) - other_radius**2)
+        if discriminant <= 0:
+            return None
+        delta = math.sqrt(discriminant)
+        return [[b + n * (-linear + sign * delta) / quadratic for b, n in zip(base, axis)]
+                for sign in (-1, 1)]
+
+    angles = []
+    branch = None
+    for station in stations:
+        offset = [p - o for p, o in zip(station, origin)]
+        angle = math.atan2(_dot(offset, y_axis), _dot(offset, x_axis))
+        if angles:
+            angle += round((angles[-1] - angle) / math.tau) * math.tau
+        points = intersections(angle)
+        if points is None:
+            return None
+        side = min(range(2), key=lambda i: math.dist(station, points[i]))
+        if math.dist(station, points[side]) > CURVE_TOLERANCE or branch not in (None, side):
+            return None
+        branch = side
+        if not angles or angles[-1] != angle:
+            angles.append(angle)
+    if len(angles) < 2:
+        return None
+    direction = 1 if angles[-1] > angles[0] else -1
+    spans = [direction * (angle - angles[0]) for angle in angles]
+    if any(not 0 < b - a < math.pi for a, b in zip(spans, spans[1:])):
+        return None
+
+    def point_at(parameter):
+        points = intersections(angles[0] + direction * parameter)
+        if points is None:
+            raise EvaluateError("cylinder intersection crosses a branch endpoint")
+        return points[branch]
+
+    return _fit_parametric_spans(point_at, spans, CURVE_TOLERANCE / 10)
 
 
 def _limit_kind(limit):

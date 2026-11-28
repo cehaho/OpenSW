@@ -16,7 +16,7 @@ SCALE = 1000.0
 DIGITS = 17
 
 SURFACES = {"PLANE", "CYLINDER", "CONE", "SPHERE", "TORUS", "B_SURFACE",
-            "SWEPT_SURF", "OFFSET_SURF", "BLENDED_EDGE"}
+            "SWEPT_SURF", "SPUN_SURF", "OFFSET_SURF", "BLENDED_EDGE"}
 
 REPARAMETRISED = {"BLENDED_EDGE"}
 
@@ -132,6 +132,9 @@ def _same_sense(face_node: Node, surface_node: Node) -> str:
         surface_node.name != "OFFSET_SURF"
         and _sense(surface_node.values.get("sense")) == "-"
     )
+    # STEP revolution parameters are (angle, profile), the reverse of Parasolid.
+    if surface_node.name == "SPUN_SURF":
+        surface_reversed = not surface_reversed
     return ".F." if face_reversed != surface_reversed else ".T."
 
 
@@ -431,11 +434,22 @@ def write_surface(writer: Writer, node: Node, model=None) -> int | None:
         )
     if node.name == "B_SURFACE" and model is not None:
         return _write_bspline_surface(writer, model, node)
+    if node.name == "SPUN_SURF" and model is not None:
+        profile = model.get(values["profile"])
+        if profile is None:
+            return None
+        curve = _write_profile(writer, profile, model)
+        if curve is None:
+            return None
+        point = writer.point(values["base"])
+        direction = writer.direction(values["axis"])
+        axis = writer.add(f"AXIS1_PLACEMENT ( 'NONE', #{point}, #{direction} )")
+        return writer.add(f"SURFACE_OF_REVOLUTION ( 'NONE', #{curve}, #{axis} )")
     if node.name == "SWEPT_SURF" and model is not None:
         section = model.get(values.get("section", 0))
         if section is None:
             return None
-        curve = write_curve(writer, section, model)
+        curve = _write_profile(writer, section, model)
         if curve is None:
             return None
         sweep = writer.add(
@@ -607,6 +621,25 @@ def write_curve(writer: Writer, node: Node, model=None) -> int | None:
     return None
 
 
+def _write_profile(writer: Writer, node: Node, model) -> int | None:
+    """Preserve a generating curve's range even without EDGE_CURVE vertices."""
+    if node.name != "TRIMMED_CURVE":
+        return write_curve(writer, node, model)
+    values = node.values
+    basis = model.get(values["basis_curve"])
+    if basis is None or basis.name not in {"LINE", "CIRCLE", "ELLIPSE", "B_CURVE"}:
+        return None
+    curve = write_curve(writer, basis, model)
+    if curve is None:
+        return None
+    start, end = values["parm_1"], values["parm_2"]
+    sense = ".T." if end >= start else ".F."
+    return writer.add(
+        f"TRIMMED_CURVE ( 'NONE', #{curve}, ( PARAMETER_VALUE ( {_real(start)} ) ), "
+        f"( PARAMETER_VALUE ( {_real(end)} ) ), {sense}, .PARAMETER. )"
+    )
+
+
 def _write_blend(writer: Writer, model, node: Node) -> int | None:
     try:
         stations = evaluate.blend_stations(model, node)
@@ -712,19 +745,6 @@ def _on_a_blend(model, surface, depth=0) -> bool:
         return _on_a_blend(model, model.get(surface.values.get("surface", 0)),
                            depth + 1)
     return False
-
-
-def _on_the_vertices(poles, ends):
-    if ends is None or ends[0] is None or ends[1] is None:
-        return poles
-    premier, dernier = ends
-    droit = math.dist(poles[0], premier) + math.dist(poles[-1], dernier)
-    inverse = math.dist(poles[0], dernier) + math.dist(poles[-1], premier)
-    if inverse < droit:
-        premier, dernier = dernier, premier
-    poles = [list(p) for p in poles]
-    poles[0], poles[-1] = list(premier), list(dernier)
-    return poles
 
 
 def _write_cubic_3d(writer: Writer, poles, knots, mults) -> int:
@@ -892,10 +912,18 @@ class Translator:
             )
             return None
         try:
-            poles, knots, mults = evaluate.interpolating_cubic(points)
-        except evaluate.EvaluateError:
+            surfaces = [self.model.get(i) for i in node.values.get("surface", ())]
+            samples = _read[1] if _read and not blend else None
+            fitted = evaluate.cylinder_intersection(self.model, node, points)
+            if fitted is None:
+                fitted = evaluate.projected_intersection(self.model, surfaces, points, samples)
+            if fitted is None:
+                raise evaluate.EvaluateError("intersection has no verified pair of carriers")
+            poles, knots, mults, error = fitted
+            self.report.worst_curve_error = max(self.report.worst_curve_error, error)
+        except evaluate.EvaluateError as error:
             self.report._note(
-                self.report.skipped_curves, "INTERSECTION (chart degenerate)"
+                self.report.skipped_curves, f"INTERSECTION ({error})"
             )
             return None
         self.report.charted_curves += 1
@@ -1014,7 +1042,7 @@ class Translator:
         )
         return pcurve, surface_node, spec, span, along
 
-    def surface_curve(self, halfedge: Node, ends=None) -> int | None:
+    def surface_curve(self, halfedge: Node) -> int | None:
         partner = self.model.get(halfedge.values.get("other", 0))
         reads = [self._sp_geometry(halfedge)]
         if partner is not None:
@@ -1023,11 +1051,16 @@ class Translator:
         if not reads:
             return None
         exact = [read for read in reads if not _on_a_blend(self.model, read[0])]
-        surface_node, spec, span, _along = (exact or reads)[0]
+        primary = (exact or reads)[0]
+        surface_node, spec, span, _along = primary
         try:
-            poles, knots, mults, error = evaluate.adaptive_cubic(
-                self.model, surface_node, spec, span=span
-            )
+            if len(reads) == 2 and reads[0][0].index != reads[1][0].index:
+                partner_read = reads[1] if primary is reads[0] else reads[0]
+                poles, knots, mults, error = evaluate.paired_surface_trim(self.model, primary, partner_read)
+            else:
+                poles, knots, mults, error = evaluate.adaptive_cubic(
+                    self.model, surface_node, spec, span=span
+                )
         except evaluate.EvaluateError:
             self.report._note(
                 self.report.skipped_curves, "(SP_CURVE will not evaluate)"
@@ -1035,7 +1068,8 @@ class Translator:
             return None
         self.report.approximated_curves += 1
         self.report.worst_curve_error = max(self.report.worst_curve_error, error)
-        poles = _on_the_vertices(poles, ends)
+        # Keep the fitted trim on its source surface. Tolerant topological
+        # vertices are emitted separately as the EDGE_CURVE endpoints.
         curve3d = _write_cubic_3d(self.writer, poles, knots, mults)
 
         sides = [self._pcurve(halfedge)]
@@ -1084,7 +1118,7 @@ class Translator:
             if seam_point is not None:
                 ends = (seam_point, seam_point)
         if curve_node is None:
-            curve = self.surface_curve(halfedge, ends)
+            curve = self.surface_curve(halfedge)
             if curve is None:
                 self.report._note(
                     self.report.skipped_curves, "(edge without curve)"
